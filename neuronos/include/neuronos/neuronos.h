@@ -1,6 +1,6 @@
 /* ============================================================
  * NeuronOS Agent Engine — Public API
- * Version 0.4.0
+ * Version 0.5.0
  *
  * The fastest AI agent engine in the world.
  * Universal, offline, runs on any device.
@@ -22,9 +22,9 @@ extern "C" {
 
 /* ---- Version ---- */
 #define NEURONOS_VERSION_MAJOR 0
-#define NEURONOS_VERSION_MINOR 4
+#define NEURONOS_VERSION_MINOR 5
 #define NEURONOS_VERSION_PATCH 0
-#define NEURONOS_VERSION_STRING "0.4.0"
+#define NEURONOS_VERSION_STRING "0.5.0"
 
 /* ---- Opaque types ---- */
 typedef struct neuronos_engine neuronos_engine_t;
@@ -332,6 +332,85 @@ int neuronos_context_capacity(const neuronos_agent_t * agent);
 
 /* Get context usage ratio (0.0 - 1.0) */
 float neuronos_context_usage_ratio(const neuronos_agent_t * agent);
+
+/* ============================================================
+ * AUTO-TUNING: Optimal parameters for maximum performance
+ *
+ * Detects hardware → computes optimal n_threads, n_batch,
+ * n_ctx, flash_attn, mmap, mlock for the fastest inference.
+ * ============================================================ */
+
+typedef struct {
+    int n_threads;    /* Optimal thread count (physical cores)    */
+    int n_batch;      /* Batch size for prompt processing          */
+    int n_ctx;        /* Context size (max tokens in conversation) */
+    bool flash_attn;  /* Enable flash attention if supported       */
+    bool use_mmap;    /* Memory-map model file (always true)       */
+    bool use_mlock;   /* Lock model in RAM (if enough headroom)    */
+    int n_gpu_layers; /* GPU layers to offload (0 = CPU only)      */
+} neuronos_tuned_params_t;
+
+/* Auto-compute optimal parameters for a given model+hardware combo */
+neuronos_tuned_params_t neuronos_auto_tune(const neuronos_hw_info_t * hw, const neuronos_model_entry_t * model);
+
+/* Print tuned parameters to stderr */
+void neuronos_tune_print(const neuronos_tuned_params_t * params);
+
+/* ============================================================
+ * ZERO-ARG LAUNCHER: Full auto-config pipeline
+ *
+ * neuronos_auto_launch() does everything:
+ *   1. Detect hardware
+ *   2. Scan multiple model search paths
+ *   3. Select best model for hardware
+ *   4. Compute optimal parameters
+ *   5. Initialize engine + load model
+ *
+ * Returns a fully ready model+engine pair.
+ * ============================================================ */
+
+typedef struct {
+    neuronos_engine_t * engine;
+    neuronos_model_t * model;
+    neuronos_hw_info_t hw;
+    neuronos_tuned_params_t tuning;
+    neuronos_model_entry_t selected_model;
+    neuronos_status_t status;
+} neuronos_auto_ctx_t;
+
+/* Model search path list (NULL-terminated) */
+#define NEURONOS_MAX_SEARCH_PATHS 8
+
+/* Auto-launch: detect → scan → select → tune → load → ready.
+ * extra_model_dirs is a NULL-terminated list of additional search paths.
+ * Pass NULL to use only default search paths.                       */
+neuronos_auto_ctx_t neuronos_auto_launch(const char ** extra_model_dirs, bool verbose);
+
+/* Release auto context */
+void neuronos_auto_release(neuronos_auto_ctx_t * ctx);
+
+/* ============================================================
+ * HTTP SERVER (OpenAI-compatible API)
+ *
+ * Enables: desktop (Tauri/Electron), browser, mobile,
+ *          VSCode Copilot, any OpenAI client.
+ *
+ * Endpoints:
+ *   POST /v1/chat/completions
+ *   POST /v1/completions
+ *   GET  /v1/models
+ *   GET  /health
+ * ============================================================ */
+
+typedef struct {
+    const char * host; /* "0.0.0.0" or "127.0.0.1" (default)     */
+    int port;          /* Default: 8080                           */
+    bool cors;         /* Enable CORS for browser clients          */
+} neuronos_server_params_t;
+
+/* Start HTTP server (blocking). Returns status on exit. */
+neuronos_status_t neuronos_server_start(neuronos_model_t * model, neuronos_tool_registry_t * tools,
+                                        neuronos_server_params_t params);
 
 #ifdef __cplusplus
 }

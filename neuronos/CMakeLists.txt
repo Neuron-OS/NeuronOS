@@ -1,10 +1,11 @@
 ##
-## NeuronOS — CMakeLists.txt  (v0.4.0)
+## NeuronOS — CMakeLists.txt  (v0.5.0)
 ##
-## Builds the full NeuronOS Agent Engine:
+## Builds the full NeuronOS Universal Agent Engine:
 ##   - HAL (Hardware Abstraction Layer)
-##   - Engine (inference wrapper + HW detect + model selector)
+##   - Engine (inference wrapper + HW detect + model selector + auto-tune)
 ##   - Agent (tool registry + ReAct loop)
+##   - Interface (HTTP server, future: WASM, mobile bridges)
 ##
 
 cmake_minimum_required(VERSION 3.14)
@@ -92,6 +93,24 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 
 # ═════════════════════════════════════════════════════════════
+# Layer 4: Interface — HTTP server (OpenAI-compatible API)
+# ═════════════════════════════════════════════════════════════
+set(INTERFACE_SOURCES
+    src/interface/neuronos_server.c
+)
+
+add_library(neuronos_interface STATIC ${INTERFACE_SOURCES})
+target_include_directories(neuronos_interface
+    PUBLIC ${NEURONOS_INCLUDE_DIR}
+)
+target_link_libraries(neuronos_interface PUBLIC neuronos_engine)
+
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(neuronos_interface PRIVATE
+        -Wall -Wextra -Wpedantic -Wno-unused-parameter)
+endif()
+
+# ═════════════════════════════════════════════════════════════
 # Tests
 # ═════════════════════════════════════════════════════════════
 option(NEURONOS_BUILD_TESTS "Build NeuronOS tests" ON)
@@ -109,11 +128,11 @@ if(NEURONOS_BUILD_TESTS)
         ${LLAMA_SRC_DIR}/include
         ${LLAMA_SRC_DIR}/ggml/include
     )
-    target_link_libraries(test_engine PRIVATE neuronos_agent neuronos_engine neuronos_hal m)
+    target_link_libraries(test_engine PRIVATE neuronos_agent neuronos_interface neuronos_engine neuronos_hal m)
 endif()
 
 # ═════════════════════════════════════════════════════════════
-# neuronos-cli — Simple CLI for agent use
+# neuronos-cli — Universal AI agent CLI
 # ═════════════════════════════════════════════════════════════
 add_executable(neuronos-cli src/cli/neuronos_cli.c)
 target_include_directories(neuronos-cli PRIVATE
@@ -121,4 +140,4 @@ target_include_directories(neuronos-cli PRIVATE
     ${LLAMA_SRC_DIR}/include
     ${LLAMA_SRC_DIR}/ggml/include
 )
-target_link_libraries(neuronos-cli PRIVATE neuronos_agent neuronos_engine neuronos_hal m)
+target_link_libraries(neuronos-cli PRIVATE neuronos_agent neuronos_interface neuronos_engine neuronos_hal m)

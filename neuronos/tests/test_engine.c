@@ -1,5 +1,5 @@
 /* ============================================================
- * NeuronOS — Engine & Agent Test Suite
+ * NeuronOS — Engine & Agent Test Suite v0.5
  *
  * Tests:
  *  1. Engine init/shutdown
@@ -8,6 +8,10 @@
  *  4. Text generation with GBNF grammar (JSON)
  *  5. Tool registry operations
  *  6. Tool execution (calculate)
+ *  7. Hardware detection
+ *  8. Model scanner
+ *  9. Auto-tuning engine
+ * 10. Zero-arg auto-launch
  *
  * Usage: ./test_engine <path-to-gguf-model>
  * ============================================================ */
@@ -60,7 +64,7 @@ static void test_engine_init(void) {
     /* Verify version */
     const char * ver = neuronos_version();
     ASSERT(ver != NULL, "version is NULL");
-    ASSERT(strcmp(ver, "0.4.0") == 0, "version mismatch");
+    ASSERT(strcmp(ver, "0.5.0") == 0, "version mismatch");
 
     /* Init engine */
     neuronos_engine_params_t params = {
@@ -337,11 +341,101 @@ static void test_model_scanner(void) {
 }
 
 /* ============================================================
+ * TEST 9: Auto-tuning engine
+ * ============================================================ */
+static void test_auto_tune(void) {
+    TEST_START("Auto-tuning engine");
+
+    neuronos_hw_info_t hw = neuronos_detect_hardware();
+
+    /* Create a fake model entry for tuning */
+    neuronos_model_entry_t fake_model = {
+        .file_size_mb = 1200,
+        .est_ram_mb = 1660,
+        .n_params_est = 2000000000LL,
+        .fits_in_ram = true,
+        .score = 1100.0f,
+    };
+    snprintf(fake_model.name, sizeof(fake_model.name), "test-model-2B");
+    snprintf(fake_model.path, sizeof(fake_model.path), "/tmp/test.gguf");
+
+    neuronos_tuned_params_t tuned = neuronos_auto_tune(&hw, &fake_model);
+
+    /* Validate: threads should be > 0 and <= logical cores */
+    ASSERT(tuned.n_threads > 0, "n_threads should be > 0");
+    ASSERT(tuned.n_threads <= hw.n_cores_logical, "n_threads should be <= logical cores");
+
+    /* Validate: batch should be 512, 1024, or 2048 */
+    ASSERT(tuned.n_batch >= 512, "n_batch should be >= 512");
+    ASSERT(tuned.n_batch <= 2048, "n_batch should be <= 2048");
+
+    /* Validate: context should be >= 512 and <= 8192 */
+    ASSERT(tuned.n_ctx >= 512, "n_ctx should be >= 512");
+    ASSERT(tuned.n_ctx <= 8192, "n_ctx should be <= 8192");
+
+    /* Validate: mmap should always be true */
+    ASSERT(tuned.use_mmap == true, "use_mmap should be true");
+
+    fprintf(stderr, "\n  threads=%d batch=%d ctx=%d mmap=%d mlock=%d gpu=%d", tuned.n_threads, tuned.n_batch,
+            tuned.n_ctx, tuned.use_mmap, tuned.use_mlock, tuned.n_gpu_layers);
+
+    /* Print formatted output */
+    neuronos_tune_print(&tuned);
+
+    TEST_PASS();
+}
+
+/* ============================================================
+ * TEST 10: Zero-arg auto-launch
+ * ============================================================ */
+static void test_auto_launch(void) {
+    TEST_START("Zero-arg auto-launch");
+
+    /* Try auto-launch with default search paths */
+    neuronos_auto_ctx_t ctx = neuronos_auto_launch(NULL, false);
+
+    if (ctx.status == NEURONOS_OK) {
+        /* Full pipeline succeeded */
+        ASSERT(ctx.engine != NULL, "engine should not be NULL");
+        ASSERT(ctx.model != NULL, "model should not be NULL");
+        ASSERT(ctx.tuning.n_threads > 0, "tuning n_threads should be > 0");
+        ASSERT(ctx.selected_model.score > 0, "selected model score should be > 0");
+
+        fprintf(stderr, "\n  Auto-launched: %s (score=%.1f)", ctx.selected_model.name, ctx.selected_model.score);
+        fprintf(stderr, "\n  Tuning: threads=%d batch=%d ctx=%d", ctx.tuning.n_threads, ctx.tuning.n_batch,
+                ctx.tuning.n_ctx);
+
+        /* Quick generation test to verify it works */
+        neuronos_gen_params_t gparams = {
+            .prompt = "Test:",
+            .max_tokens = 8,
+            .temperature = 0.5f,
+            .top_p = 0.95f,
+            .top_k = 40,
+            .grammar = NULL,
+            .on_token = NULL,
+            .seed = 42,
+        };
+        neuronos_gen_result_t result = neuronos_generate(ctx.model, gparams);
+        ASSERT(result.status == NEURONOS_OK, "auto-launched model should generate");
+        ASSERT(result.n_tokens > 0, "should generate tokens");
+        fprintf(stderr, "\n  Generated %d tokens at %.2f t/s", result.n_tokens, result.tokens_per_s);
+        neuronos_gen_result_free(&result);
+
+        neuronos_auto_release(&ctx);
+    } else {
+        fprintf(stderr, "\n  No models found in default paths (OK in CI)");
+    }
+
+    TEST_PASS();
+}
+
+/* ============================================================
  * MAIN
  * ============================================================ */
 int main(int argc, char * argv[]) {
     fprintf(stderr, "═══════════════════════════════════════════\n");
-    fprintf(stderr, "  NeuronOS Engine & Agent Test Suite v0.4\n");
+    fprintf(stderr, "  NeuronOS Engine & Agent Test Suite v0.5\n");
     fprintf(stderr, "═══════════════════════════════════════════\n");
 
     if (argc > 1) {
@@ -361,6 +455,8 @@ int main(int argc, char * argv[]) {
     test_tool_execute();
     test_hardware_detection();
     test_model_scanner();
+    test_auto_tune();
+    test_auto_launch();
 
     /* Cleanup model if loaded */
     if (g_model)

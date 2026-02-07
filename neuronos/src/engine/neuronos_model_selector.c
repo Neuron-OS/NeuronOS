@@ -439,3 +439,234 @@ float neuronos_context_usage_ratio(const neuronos_agent_t * agent) {
         return 0.0f;
     return (float)used / (float)cap;
 }
+
+/* ============================================================
+ * AUTO-TUNING ENGINE
+ *
+ * Computes optimal inference parameters for max performance.
+ * Rules derived from llama.cpp benchmarks + community knowledge:
+ *   - n_threads = physical cores (HT adds 0% for matmul)
+ *   - n_batch scales with available RAM
+ *   - n_ctx maximized within free memory budget
+ *   - mmap always, mlock when headroom available
+ * ============================================================ */
+
+neuronos_tuned_params_t neuronos_auto_tune(const neuronos_hw_info_t * hw, const neuronos_model_entry_t * model) {
+    neuronos_tuned_params_t t = {0};
+
+    /* Threads: physical cores only (HT hurts matmul throughput) */
+    t.n_threads = hw->n_cores_physical;
+    if (t.n_threads <= 0)
+        t.n_threads = 4;
+
+    /* Batch size: scales with available RAM
+     * ≤4GB: 512, ≤16GB: 1024, >16GB: 2048 */
+    if (hw->ram_available_mb <= 4096)
+        t.n_batch = 512;
+    else if (hw->ram_available_mb <= 16384)
+        t.n_batch = 1024;
+    else
+        t.n_batch = 2048;
+
+    /* Context size: max tokens we can afford after model is loaded
+     * KV cache ≈ 2 × n_layers × d_model × sizeof(f16) × n_ctx / 1024²
+     * Rough estimate: 1 token ≈ 0.1MB for a 2B model */
+    int64_t free_after_model = hw->model_budget_mb - model->est_ram_mb;
+    if (free_after_model < 256)
+        free_after_model = 256;
+
+    /* Heuristic: each 1K context costs ~75MB for a 2B model */
+    int ctx_capacity = (int)(free_after_model * 1024 / 75);
+    if (ctx_capacity > 8192)
+        ctx_capacity = 8192; /* cap at 8K for now */
+    if (ctx_capacity < 512)
+        ctx_capacity = 512;
+    /* Round to nearest 512 */
+    t.n_ctx = (ctx_capacity / 512) * 512;
+
+    /* Flash attention: enable if we're on a capable build */
+    t.flash_attn = false; /* TODO: detect from llama.cpp build flags */
+
+    /* mmap: always true (lazy page loading, reduces RSS) */
+    t.use_mmap = true;
+
+    /* mlock: lock model in RAM if we have 2× headroom
+     * Prevents OS from swapping model pages during inference */
+    t.use_mlock = (hw->ram_available_mb > model->est_ram_mb * 2 + 1024);
+
+    /* GPU layers: future — for now CPU only */
+    t.n_gpu_layers = 0;
+    if (hw->gpu_vram_mb > 0) {
+        /* Estimate: each layer ≈ model_size / n_layers
+         * For now, try to offload all if VRAM fits */
+        int64_t est_model_vram = model->file_size_mb + 256; /* file + overhead */
+        if (hw->gpu_vram_mb >= est_model_vram) {
+            t.n_gpu_layers = 999; /* all layers */
+        } else {
+            /* Partial offload: proportion that fits */
+            t.n_gpu_layers = (int)(30 * hw->gpu_vram_mb / est_model_vram);
+        }
+    }
+
+    return t;
+}
+
+void neuronos_tune_print(const neuronos_tuned_params_t * params) {
+    if (!params)
+        return;
+    fprintf(stderr, "╔══════════════════════════════════════════╗\n");
+    fprintf(stderr, "║  NeuronOS Auto-Tuning                    ║\n");
+    fprintf(stderr, "╠══════════════════════════════════════════╣\n");
+    fprintf(stderr, "║  Threads:     %-4d (physical cores only)  ║\n", params->n_threads);
+    fprintf(stderr, "║  Batch size:  %-4d                        ║\n", params->n_batch);
+    fprintf(stderr, "║  Context:     %-4d tokens                 ║\n", params->n_ctx);
+    fprintf(stderr, "║  Flash attn:  %-3s                         ║\n", params->flash_attn ? "yes" : "no");
+    fprintf(stderr, "║  Memory map:  %-3s                         ║\n", params->use_mmap ? "yes" : "no");
+    fprintf(stderr, "║  Memory lock: %-3s                         ║\n", params->use_mlock ? "yes" : "no");
+    fprintf(stderr, "║  GPU layers:  %-4d                        ║\n", params->n_gpu_layers);
+    fprintf(stderr, "╚══════════════════════════════════════════╝\n");
+}
+
+/* ============================================================
+ * ZERO-ARG LAUNCHER
+ *
+ * The entire auto-config pipeline in one call:
+ *   detect → scan → select → tune → load → ready
+ * ============================================================ */
+
+/* Default model search paths */
+static const char * default_search_paths[] = {
+    "./models",
+    "../../models", /* relative to build dir */
+    NULL,           /* $HOME/.neuronos/models (filled at runtime) */
+    "/usr/share/neuronos/models",
+    NULL, /* sentinel */
+};
+
+neuronos_auto_ctx_t neuronos_auto_launch(const char ** extra_model_dirs, bool verbose) {
+    neuronos_auto_ctx_t ctx = {0};
+
+    /* Step 1: Detect hardware */
+    ctx.hw = neuronos_detect_hardware();
+    if (verbose)
+        neuronos_hw_print_info(&ctx.hw);
+
+    /* Step 2: Build search path list */
+    const char * search_paths[16] = {0};
+    int sp = 0;
+
+    /* Add extra dirs first (highest priority) */
+    if (extra_model_dirs) {
+        for (int i = 0; extra_model_dirs[i] && sp < 14; i++) {
+            search_paths[sp++] = extra_model_dirs[i];
+        }
+    }
+
+    /* Add default paths */
+    for (int i = 0; default_search_paths[i] && sp < 14; i++) {
+        search_paths[sp++] = default_search_paths[i];
+    }
+
+    /* Add $HOME/.neuronos/models */
+    char home_models[512] = {0};
+    const char * home = getenv("HOME");
+    if (!home)
+        home = getenv("USERPROFILE"); /* Windows */
+    if (home) {
+        snprintf(home_models, sizeof(home_models), "%s/.neuronos/models", home);
+        search_paths[sp++] = home_models;
+    }
+
+    /* Add $NEURONOS_MODELS env var */
+    const char * env_models = getenv("NEURONOS_MODELS");
+    if (env_models && sp < 15) {
+        search_paths[sp++] = env_models;
+    }
+
+    /* Step 3: Scan all paths for models */
+    neuronos_model_entry_t * best_overall = NULL;
+    neuronos_model_entry_t * all_models = NULL;
+    int best_count = 0;
+
+    for (int i = 0; i < sp; i++) {
+        int count = 0;
+        neuronos_model_entry_t * models = neuronos_model_scan(search_paths[i], &ctx.hw, &count);
+        if (models && count > 0) {
+            const neuronos_model_entry_t * best = neuronos_model_select_best(models, count);
+            if (best && (!best_overall || best->score > best_overall->score)) {
+                if (all_models)
+                    neuronos_model_scan_free(all_models, best_count);
+                all_models = models;
+                best_count = count;
+                best_overall = (neuronos_model_entry_t *)best;
+            } else {
+                neuronos_model_scan_free(models, count);
+            }
+        }
+    }
+
+    if (!best_overall) {
+        ctx.status = NEURONOS_ERROR_MODEL_LOAD;
+        if (verbose) {
+            fprintf(stderr, "Error: No .gguf models found in any search path:\n");
+            for (int i = 0; i < sp; i++)
+                fprintf(stderr, "  - %s\n", search_paths[i]);
+        }
+        return ctx;
+    }
+
+    ctx.selected_model = *best_overall;
+    if (verbose)
+        fprintf(stderr, "★ Auto-selected: %s (%.1f score, %lld MB)\n", best_overall->name, best_overall->score,
+                (long long)best_overall->file_size_mb);
+
+    /* Step 4: Auto-tune parameters */
+    ctx.tuning = neuronos_auto_tune(&ctx.hw, best_overall);
+    if (verbose)
+        neuronos_tune_print(&ctx.tuning);
+
+    /* Step 5: Initialize engine with tuned params */
+    neuronos_engine_params_t eparams = {
+        .n_threads = ctx.tuning.n_threads,
+        .n_gpu_layers = ctx.tuning.n_gpu_layers,
+        .verbose = verbose,
+    };
+    ctx.engine = neuronos_init(eparams);
+    if (!ctx.engine) {
+        ctx.status = NEURONOS_ERROR_INIT;
+        neuronos_model_scan_free(all_models, best_count);
+        return ctx;
+    }
+
+    /* Step 6: Load model with optimal context */
+    neuronos_model_params_t mparams = {
+        .model_path = best_overall->path,
+        .context_size = ctx.tuning.n_ctx,
+        .use_mmap = ctx.tuning.use_mmap,
+    };
+    ctx.model = neuronos_model_load(ctx.engine, mparams);
+    if (!ctx.model) {
+        ctx.status = NEURONOS_ERROR_MODEL_LOAD;
+        neuronos_shutdown(ctx.engine);
+        ctx.engine = NULL;
+        neuronos_model_scan_free(all_models, best_count);
+        return ctx;
+    }
+
+    ctx.status = NEURONOS_OK;
+    neuronos_model_scan_free(all_models, best_count);
+    return ctx;
+}
+
+void neuronos_auto_release(neuronos_auto_ctx_t * ctx) {
+    if (!ctx)
+        return;
+    if (ctx->model) {
+        neuronos_model_free(ctx->model);
+        ctx->model = NULL;
+    }
+    if (ctx->engine) {
+        neuronos_shutdown(ctx->engine);
+        ctx->engine = NULL;
+    }
+}
