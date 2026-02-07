@@ -1,0 +1,42 @@
+# NeuronOS Agent — Tool Call / Final Answer grammar
+#
+# Forces the model to output EXACTLY one of:
+# 1. Tool call:   {"thought": "...", "action": "tool_name", "args": {...}}
+# 2. Final answer: {"thought": "...", "answer": "..."}
+#
+# This grammar is the KEY to making a 2B model work as a reliable agent.
+# Invalid tokens are masked at sampling time (logit = -INFINITY).
+
+root ::= ws "{" ws step ws "}" ws
+
+step ::= tool-call | final-answer
+
+tool-call ::= "\"thought\"" ws ":" ws string ws "," ws "\"action\"" ws ":" ws tool-name ws "," ws "\"args\"" ws ":" ws object
+
+final-answer ::= "\"thought\"" ws ":" ws string ws "," ws "\"answer\"" ws ":" ws string
+
+# tool-name will be injected dynamically based on registered tools
+# fallback: allow any quoted string
+tool-name ::= "\"" tool-name-chars "\""
+tool-name-chars ::= [a-z_] [a-z_0-9]*
+
+object ::= "{" ws "}" | "{" ws members ws "}"
+members ::= pair ( ws "," ws pair )*
+pair ::= string ws ":" ws value
+
+value ::= string | number | object | array | "true" | "false" | "null"
+
+array ::= "[" ws "]" | "[" ws values ws "]"
+values ::= value ( ws "," ws value )*
+
+string ::= "\"" characters "\""
+characters ::= "" | characters character
+character ::= [^"\\] | "\\" escape
+escape ::= ["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]
+
+number ::= integer fraction? exponent?
+integer ::= "-"? ( "0" | [1-9] [0-9]* )
+fraction ::= "." [0-9]+
+exponent ::= [eE] [+-]? [0-9]+
+
+ws ::= [ \t\n\r]*

@@ -83,7 +83,7 @@ size_t quantize_i2_s(const float * src, void * dst, int64_t nrow, int64_t n_per_
             int group_idx = j / 32;
             int group_pos = j % 32;
             uint8_t temp = (q8[i * QK_I2_S + j] << (6 - 2 * group_idx));
-            i2_weight[i * 32 + group_pos] |= temp;            
+            i2_weight[i * 32 + group_pos] |= temp;
         }
     }
 
@@ -181,7 +181,7 @@ size_t quantize_i2_s(const float * src, void * dst, int64_t nrow, int64_t n_per_
             int group_idx = j / 16;
             int group_pos = j % 16;
             uint8_t temp = (q8[i * QK_I2_S + j] << (6 - 2 * group_idx));
-            i2_weight[i * 16 + group_pos] |= temp;            
+            i2_weight[i * 16 + group_pos] |= temp;
         }
     }
 
@@ -204,22 +204,22 @@ void ggml_vec_dot_i2_i8_s_1x1(int n, float * s, size_t bs, const void * vx, size
     const int group32_num = nb / 32;
     const int la_num = nb % 32;
     const int groupla_num = nb % 32 != 0 ? 1 : 0;
-    
+
     __m256i mask = _mm256_set1_epi8(0x03);
     __m256i one16 = _mm256_set1_epi16(1);
 
     // 处理多行，nrc表示要处理的行数
     for (int row = 0; row < nrc; row++) {
         __m256i accu = _mm256_setzero_si256();
-        
+
         // 计算当前行的x指针偏移
         const uint8_t * x_row = x + row * bx / 4;
-        
+
         for (int i = 0; i < group32_num; i++) {
             const uint8_t *px = x_row + i * 1024;     // 32 * 32
             const int8_t  *py = y + i * 4096;         // 32 * 128
             __m256i accu32 = _mm256_setzero_si256();
-            
+
             for (int j = 0; j < 32; j++) {
                 // 128 index
                 __m256i xq8_3 = _mm256_loadu_si256((const __m256i*)(px));
@@ -257,7 +257,7 @@ void ggml_vec_dot_i2_i8_s_1x1(int n, float * s, size_t bs, const void * vx, size
             __m256i accula = _mm256_setzero_si256();
             const uint8_t *px = x_row + group32_num * 1024; // 32 * 32
             const int8_t  *py = y + group32_num * 4096;     // 32 * 128
-            
+
             for (int j = 0; j < la_num; j++) {
                 // 128 index
                 __m256i xq8_3 = _mm256_loadu_si256((const __m256i*)(px));
@@ -290,7 +290,7 @@ void ggml_vec_dot_i2_i8_s_1x1(int n, float * s, size_t bs, const void * vx, size
             }
             accu = _mm256_add_epi32(accu, _mm256_madd_epi16(accula, one16));
         }
-        
+
         int sumi = hsum_i32_8(accu);
         s[row] = (float)sumi;
     }
@@ -432,15 +432,15 @@ void ggml_vec_dot_i2_i8_s_1x4_32W(int n, float * s, size_t bs, const void * vx, 
         }
         const uint8_t * x_row = x + (row) * bx / 4;
         // 计算当前行的x指针偏移
-        
+
         for (int i = 0; i < group32_num; i++) {
             const uint8_t * px = x_row + i * 1024 * 4;
             __m256i accu32[4];
             for(int rb = 0; rb < 4; rb++) {
                 accu32[rb] = _mm256_setzero_si256();
             }
-            const int8_t  *py = y + i * 4096; 
-            
+            const int8_t  *py = y + i * 4096;
+
             for (int j = 0; j < 32 * 4; j++) {
                 // each 32 index
                 __m256i yq8_0 = _mm256_loadu_si256((const __m256i*)(py));
@@ -463,7 +463,7 @@ void ggml_vec_dot_i2_i8_s_1x4_32W(int n, float * s, size_t bs, const void * vx, 
             }
             for(int rb = 0; rb < 4; rb++) {
                 accu[rb] = _mm256_add_epi32(_mm256_madd_epi16(accu32[rb], one16), accu[rb]);
-            } 
+            }
         }
 
         for (int i = 0; i < groupla_num; i++) {
@@ -473,7 +473,7 @@ void ggml_vec_dot_i2_i8_s_1x4_32W(int n, float * s, size_t bs, const void * vx, 
                 accula[rb] = _mm256_setzero_si256();
             }
             const uint8_t * px = x_row + group32_num * 1024 * 4;
-            
+
             for (int j = 0; j < la_num * 4; j++) {
                 // each 32 index
                 __m256i yq8_0 = _mm256_loadu_si256((const __m256i*)(py));
@@ -496,9 +496,9 @@ void ggml_vec_dot_i2_i8_s_1x4_32W(int n, float * s, size_t bs, const void * vx, 
             }
             for(int rb = 0; rb < 4; rb++) {
                 accu[rb] = _mm256_add_epi32(accu[rb], _mm256_madd_epi16(accula[rb], one16));
-            } 
+            }
         }
-        
+
         for(int rb = 0; rb < 4; rb++) {
             int sumi = hsum_i32_8(accu[rb]);
             s[row + rb] = (float)sumi;
@@ -532,7 +532,7 @@ void ggml_vec_dot_i2_i8_s_1xN(int n, float * s, size_t bs, const void * vx, size
             x_row[rb] = x + (row + rb) * bx / 4;
         }
         // 计算当前行的x指针偏移
-        
+
         for (int i = 0; i < group32_num; i++) {
             const uint8_t * px[PARALLEL_SIZE];
             __m256i accu32[PARALLEL_SIZE];
@@ -541,7 +541,7 @@ void ggml_vec_dot_i2_i8_s_1xN(int n, float * s, size_t bs, const void * vx, size
                 accu32[rb] = _mm256_setzero_si256();
             }
             const int8_t  *py = y + i * 4096;         // 32 * 128
-            
+
             for (int j = 0; j < 32; j++) {
                 // each 32 index
                 __m256i yq8_0 = _mm256_loadu_si256((const __m256i*)(py));
@@ -575,7 +575,7 @@ void ggml_vec_dot_i2_i8_s_1xN(int n, float * s, size_t bs, const void * vx, size
             }
             for(int rb = 0; rb < PARALLEL_SIZE; rb++) {
                 accu[rb] = _mm256_add_epi32(_mm256_madd_epi16(accu32[rb], one16), accu[rb]);
-            } 
+            }
         }
 
         for (int i = 0; i < groupla_num; i++) {
@@ -586,7 +586,7 @@ void ggml_vec_dot_i2_i8_s_1xN(int n, float * s, size_t bs, const void * vx, size
                 px[rb] = x_row[rb] + group32_num * 1024;     // 32 * 32
                 accula[rb] = _mm256_setzero_si256();
             }
-            
+
             for (int j = 0; j < la_num; j++) {
                 // each 32 index
                 __m256i yq8_0 = _mm256_loadu_si256((const __m256i*)(py));
@@ -607,7 +607,7 @@ void ggml_vec_dot_i2_i8_s_1xN(int n, float * s, size_t bs, const void * vx, size
                     xq8_1 = _mm256_and_si256(xq8_1, mask);
                     xq8_0 = _mm256_and_si256(xq8_0, mask);
 
-                    
+
 
                     xq8_0 = _mm256_maddubs_epi16(xq8_0, yq8_0);
                     xq8_1 = _mm256_maddubs_epi16(xq8_1, yq8_1);
@@ -623,9 +623,9 @@ void ggml_vec_dot_i2_i8_s_1xN(int n, float * s, size_t bs, const void * vx, size
             }
             for(int rb = 0; rb < PARALLEL_SIZE; rb++) {
                 accu[rb] = _mm256_add_epi32(accu[rb], _mm256_madd_epi16(accula[rb], one16));
-            } 
+            }
         }
-        
+
         for(int rb = 0; rb < PARALLEL_SIZE; rb++) {
             int sumi = hsum_i32_8(accu[rb]);
             s[row + rb] = (float)sumi;
@@ -639,7 +639,7 @@ void ggml_vec_dot_i2_i8_s_1xN(int n, float * s, size_t bs, const void * vx, size
     const int group32_num = nb / 32;
     const int la_num = nb % 32;
     const int groupla_num = nb % 32 != 0 ? 1 : 0;
-    
+
     const uint8x16_t mask = vdupq_n_u8(3);
 
     // 处理多行，nrc表示要处理的行数
@@ -647,7 +647,7 @@ void ggml_vec_dot_i2_i8_s_1xN(int n, float * s, size_t bs, const void * vx, size
 
         int32x4_t accu[PARALLEL_SIZE];
         const uint8_t * x_row[PARALLEL_SIZE];
-        
+
         for (int rb = 0; rb < PARALLEL_SIZE; rb++) {
             accu[rb] = vdupq_n_s32(0);
             x_row[rb] = x + (row + rb) * bx / 4;
@@ -700,7 +700,7 @@ void ggml_vec_dot_i2_i8_s_1xN(int n, float * s, size_t bs, const void * vx, size
                     accu32[rb] = vmlal_s8(accu32[rb], vget_high_s8(q8_1), vget_high_s8(yq8_1));
                     accu32[rb] = vmlal_s8(accu32[rb], vget_low_s8(q8_0), vget_low_s8(yq8_0));
                     accu32[rb] = vmlal_s8(accu32[rb], vget_high_s8(q8_0), vget_high_s8(yq8_0));
-                    
+
 #endif
                     px[rb] += 16;
                 }
@@ -748,7 +748,7 @@ void ggml_vec_dot_i2_i8_s_1xN(int n, float * s, size_t bs, const void * vx, size
                     int8x16_t q8_2 = vreinterpretq_s8_u8(vandq_u8(xq8_2, mask));
                     int8x16_t q8_1 = vreinterpretq_s8_u8(vandq_u8(xq8_1, mask));
                     int8x16_t q8_0 = vreinterpretq_s8_u8(vandq_u8(xq8_0, mask));
-                    
+
 #if defined(__ARM_FEATURE_DOTPROD)
                     accu[rb] = vdotq_s32(accu[rb], q8_0, yq8_0);
                     accu[rb] = vdotq_s32(accu[rb], q8_1, yq8_1);
@@ -808,8 +808,8 @@ void ggml_vec_dot_i2_i8_s_Nx1(int n, float * s, size_t bs, const void * vx, size
             accu[iy] = _mm256_setzero_si256();
         }
 
-        int8_t * y_col = y + col * by;
-        
+        const int8_t * y_col = y + col * by;
+
         for (int i = 0; i < group32_num; i++) {
             const uint8_t *px = x + i * 1024;
             const int8_t  *py = y_col + i * 4096;
@@ -853,9 +853,9 @@ void ggml_vec_dot_i2_i8_s_Nx1(int n, float * s, size_t bs, const void * vx, size
             for (int iy = 0; iy < PARALLEL_SIZE; iy++) {
                 accula[iy] = _mm256_setzero_si256();
             }
-            
+
             for (int j = 0; j < la_num; j++) {
-                
+
                 __m256i xq8   = _mm256_loadu_si256((const __m256i*)(px));
                 __m256i xq8_3 = _mm256_and_si256(xq8, mask);
                 __m256i xq8_2 = _mm256_and_si256(_mm256_srli_epi16(xq8, 2), mask);
@@ -904,7 +904,7 @@ void ggml_vec_dot_i2_i8_s_Nx1(int n, float * s, size_t bs, const void * vx, size
         }
 
         const int8_t * y_col = y + col * by;
-        
+
         for (int i = 0; i < group32_num; i++) {
             const uint8_t *px = x + i * 512;     // i * 32 * 16
             const int8_t  *py = y_col + i * 2048; // i * 32 * 64
@@ -980,7 +980,7 @@ void ggml_vec_dot_i2_i8_s_Nx1(int n, float * s, size_t bs, const void * vx, size
                 accula[iy] = vdupq_n_s16(0);
             }
 #endif
-            
+
             for (int j = 0; j < la_num; j++) {
                 // 加载并解包 x 数据（对所有列共享）
                 uint8x16_t xq8_3 = vld1q_u8(px + 0);

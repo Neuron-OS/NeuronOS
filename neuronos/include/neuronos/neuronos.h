@@ -1,0 +1,340 @@
+/* ============================================================
+ * NeuronOS Agent Engine — Public API
+ * Version 0.4.0
+ *
+ * The fastest AI agent engine in the world.
+ * Universal, offline, runs on any device.
+ *
+ * Copyright (c) 2025 NeuronOS Project
+ * SPDX-License-Identifier: MIT
+ * ============================================================ */
+#ifndef NEURONOS_H
+#define NEURONOS_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ---- Version ---- */
+#define NEURONOS_VERSION_MAJOR 0
+#define NEURONOS_VERSION_MINOR 4
+#define NEURONOS_VERSION_PATCH 0
+#define NEURONOS_VERSION_STRING "0.4.0"
+
+/* ---- Opaque types ---- */
+typedef struct neuronos_engine neuronos_engine_t;
+typedef struct neuronos_model neuronos_model_t;
+typedef struct neuronos_agent neuronos_agent_t;
+typedef struct neuronos_tool_reg neuronos_tool_registry_t;
+typedef struct neuronos_memory neuronos_memory_t;
+
+/* ---- Status codes ---- */
+typedef enum {
+    NEURONOS_OK = 0,
+    NEURONOS_ERROR_INIT = -1,
+    NEURONOS_ERROR_MODEL_LOAD = -2,
+    NEURONOS_ERROR_GENERATE = -3,
+    NEURONOS_ERROR_TOOL_NOT_FOUND = -4,
+    NEURONOS_ERROR_TOOL_EXEC = -5,
+    NEURONOS_ERROR_GRAMMAR = -6,
+    NEURONOS_ERROR_MEMORY = -7,
+    NEURONOS_ERROR_MAX_STEPS = -8,
+    NEURONOS_ERROR_CONTEXT_FULL = -9,
+    NEURONOS_ERROR_INVALID_PARAM = -10,
+} neuronos_status_t;
+
+/* ============================================================
+ * ENGINE: Init / Shutdown
+ * ============================================================ */
+typedef struct {
+    int n_threads;    /* 0 = auto-detect (physical cores)        */
+    int n_gpu_layers; /* 0 = CPU only; >0 = offload N layers     */
+    bool verbose;     /* print info to stderr                     */
+} neuronos_engine_params_t;
+
+/* Create engine (initializes llama.cpp backend) */
+neuronos_engine_t * neuronos_init(neuronos_engine_params_t params);
+
+/* Shutdown and free all resources */
+void neuronos_shutdown(neuronos_engine_t * engine);
+
+/* Version string */
+const char * neuronos_version(void);
+
+/* ============================================================
+ * MODEL: Load / Free / Info
+ * ============================================================ */
+typedef struct {
+    const char * model_path; /* path to GGUF file                    */
+    int context_size;        /* 0 = model default (typically 2048)   */
+    bool use_mmap;           /* memory-map model (default: true)     */
+} neuronos_model_params_t;
+
+neuronos_model_t * neuronos_model_load(neuronos_engine_t * engine, neuronos_model_params_t params);
+
+void neuronos_model_free(neuronos_model_t * model);
+
+/* Model info */
+typedef struct {
+    const char * description; /* model description string             */
+    int64_t n_params;         /* number of parameters                 */
+    int64_t model_size;       /* size in bytes                        */
+    int n_vocab;              /* vocabulary size                      */
+    int n_ctx_train;          /* training context length              */
+    int n_embd;               /* embedding dimension                  */
+} neuronos_model_info_t;
+
+neuronos_model_info_t neuronos_model_info(const neuronos_model_t * model);
+
+/* ============================================================
+ * GENERATE: Text generation (inference)
+ * ============================================================ */
+
+/* Streaming callback: called for each generated token.
+ * Return false to stop generation early. */
+typedef bool (*neuronos_token_cb)(const char * token_text, void * user_data);
+
+typedef struct {
+    const char * prompt;        /* input text                   */
+    int max_tokens;             /* max tokens to generate (256) */
+    float temperature;          /* 0.0 = greedy (default: 0.7)  */
+    float top_p;                /* nucleus sampling (0.95)      */
+    int top_k;                  /* top-k sampling (40)          */
+    const char * grammar;       /* GBNF grammar or NULL         */
+    const char * grammar_root;  /* grammar root rule ("root")   */
+    neuronos_token_cb on_token; /* stream callback or NULL      */
+    void * user_data;           /* passed to callback           */
+    uint32_t seed;              /* RNG seed; 0 = random         */
+} neuronos_gen_params_t;
+
+typedef struct {
+    char * text;              /* generated text (caller must free) */
+    int n_tokens;             /* tokens generated                  */
+    double elapsed_ms;        /* total generation time             */
+    double tokens_per_s;      /* tokens/second                     */
+    neuronos_status_t status; /* NEURONOS_OK or error              */
+} neuronos_gen_result_t;
+
+/* Generate text from a prompt */
+neuronos_gen_result_t neuronos_generate(neuronos_model_t * model, neuronos_gen_params_t params);
+
+/* Free a generation result */
+void neuronos_gen_result_free(neuronos_gen_result_t * result);
+
+/* ============================================================
+ * TOOL SYSTEM: Register and execute tools
+ * ============================================================ */
+
+/* Tool result */
+typedef struct {
+    char * output; /* tool output text (caller must free with neuronos_free) */
+    bool success;
+    char * error; /* error message if !success (caller must free)           */
+} neuronos_tool_result_t;
+
+/* Tool function signature */
+typedef neuronos_tool_result_t (*neuronos_tool_fn_t)(const char * args_json, void * user_data);
+
+/* Capability flags for sandboxing */
+#define NEURONOS_CAP_FILESYSTEM (1u << 0)
+#define NEURONOS_CAP_NETWORK (1u << 1)
+#define NEURONOS_CAP_SHELL (1u << 2)
+#define NEURONOS_CAP_MEMORY (1u << 3)
+#define NEURONOS_CAP_SENSOR (1u << 4)
+#define NEURONOS_CAP_GPIO (1u << 5)
+#define NEURONOS_CAP_ALL (0xFFFFFFFFu)
+
+/* Tool descriptor */
+typedef struct {
+    const char * name;             /* e.g. "shell", "read_file"    */
+    const char * description;      /* human description for prompt */
+    const char * args_schema_json; /* JSON Schema for arguments    */
+    neuronos_tool_fn_t execute;    /* function pointer             */
+    void * user_data;              /* passed to execute()          */
+    uint32_t required_caps;        /* NEURONOS_CAP_* flags         */
+} neuronos_tool_desc_t;
+
+/* Create/free tool registry */
+neuronos_tool_registry_t * neuronos_tool_registry_create(void);
+void neuronos_tool_registry_free(neuronos_tool_registry_t * reg);
+
+/* Register a tool. Returns 0 on success. */
+int neuronos_tool_register(neuronos_tool_registry_t * reg, const neuronos_tool_desc_t * desc);
+
+/* Register default built-in tools (shell, read_file, write_file, calculate).
+ * Only registers tools whose required_caps are within allowed_caps. */
+int neuronos_tool_register_defaults(neuronos_tool_registry_t * reg, uint32_t allowed_caps);
+
+/* Execute a tool by name */
+neuronos_tool_result_t neuronos_tool_execute(neuronos_tool_registry_t * reg, const char * tool_name,
+                                             const char * args_json);
+
+/* Free tool result strings */
+void neuronos_tool_result_free(neuronos_tool_result_t * result);
+
+/* Get number of registered tools */
+int neuronos_tool_count(const neuronos_tool_registry_t * reg);
+
+/* Get tool name by index (for grammar generation) */
+const char * neuronos_tool_name(const neuronos_tool_registry_t * reg, int index);
+
+/* Generate GBNF grammar rule for registered tool names */
+char * neuronos_tool_grammar_names(const neuronos_tool_registry_t * reg);
+
+/* Generate tool descriptions for injection into system prompt */
+char * neuronos_tool_prompt_description(const neuronos_tool_registry_t * reg);
+
+/* ============================================================
+ * AGENT: ReAct agent loop
+ * ============================================================ */
+
+typedef struct {
+    int max_steps;           /* max think-act-observe cycles (10) */
+    int max_tokens_per_step; /* max tokens per gen step (512)     */
+    float temperature;       /* sampling temperature (0.7)        */
+    int context_budget;      /* max context tokens before compress */
+    bool verbose;            /* print steps to stderr             */
+} neuronos_agent_params_t;
+
+/* Step callback: called after each think-act-observe cycle */
+typedef void (*neuronos_agent_step_cb)(int step, const char * thought,
+                                       const char * action, /* tool name or "final_answer" */
+                                       const char * observation, void * user_data);
+
+typedef struct {
+    char * text; /* final answer (caller frees) */
+    int steps_taken;
+    double total_ms;
+    neuronos_status_t status;
+} neuronos_agent_result_t;
+
+/* Create an agent with a model, tools, and params */
+neuronos_agent_t * neuronos_agent_create(neuronos_model_t * model, neuronos_tool_registry_t * tools,
+                                         neuronos_agent_params_t params);
+
+void neuronos_agent_free(neuronos_agent_t * agent);
+
+/* Run the agent on a user query */
+neuronos_agent_result_t neuronos_agent_run(neuronos_agent_t * agent, const char * user_input,
+                                           neuronos_agent_step_cb on_step, void * user_data);
+
+void neuronos_agent_result_free(neuronos_agent_result_t * result);
+
+/* Set system prompt (default is built-in ReAct prompt) */
+void neuronos_agent_set_system_prompt(neuronos_agent_t * agent, const char * system_prompt);
+
+/* ============================================================
+ * MEMORY: Persistent key-value store
+ * ============================================================ */
+
+/* Open memory store (NULL path = in-memory only) */
+neuronos_memory_t * neuronos_memory_open(const char * db_path);
+void neuronos_memory_close(neuronos_memory_t * mem);
+
+int neuronos_memory_store(neuronos_memory_t * mem, const char * key, const char * value);
+char * neuronos_memory_recall(neuronos_memory_t * mem, const char * key); /* caller must free */
+int neuronos_memory_search(neuronos_memory_t * mem, const char * query, char *** results, int * n_results,
+                           int max_results);
+void neuronos_memory_free_results(char ** results, int n);
+
+/* ============================================================
+ * CONVENIENCE: One-shot agent
+ * ============================================================ */
+
+/* Quick agent: init + load + register defaults + run + cleanup.
+ * Caller must free returned string. */
+char * neuronos_quick_agent(const char * model_path, const char * prompt, int max_steps);
+
+/* Generic free (for any neuronos-allocated string) */
+void neuronos_free(void * ptr);
+
+/* ============================================================
+ * HARDWARE DETECTION
+ * ============================================================ */
+
+typedef struct {
+    /* CPU */
+    char cpu_name[128];   /* CPU model string                    */
+    char arch[32];        /* "x86_64", "aarch64", "riscv64"...   */
+    int n_cores_physical; /* Physical cores                      */
+    int n_cores_logical;  /* Logical cores (with HT)             */
+    uint32_t features;    /* Bitmask of HAL features             */
+
+    /* Memory */
+    int64_t ram_total_mb;     /* Total system RAM in MB              */
+    int64_t ram_available_mb; /* Available RAM in MB                 */
+
+    /* GPU (future) */
+    int64_t gpu_vram_mb; /* 0 = no GPU detected                */
+    char gpu_name[128];  /* GPU model string                    */
+
+    /* Budget for model loading (RAM - OS overhead - safety margin) */
+    int64_t model_budget_mb; /* Max MB available for model          */
+} neuronos_hw_info_t;
+
+/* Detect hardware capabilities */
+neuronos_hw_info_t neuronos_detect_hardware(void);
+
+/* Print hardware info to stderr */
+void neuronos_hw_print_info(const neuronos_hw_info_t * hw);
+
+/* ============================================================
+ * MODEL SCANNER & AUTO-SELECTION
+ * ============================================================ */
+
+typedef struct {
+    char path[512];       /* Absolute path to .gguf file        */
+    char name[128];       /* Model name (from filename)         */
+    int64_t file_size_mb; /* File size in MB                    */
+    int64_t est_ram_mb;   /* Estimated RAM needed (file + ctx)  */
+    int64_t n_params_est; /* Estimated params (from file size)  */
+    float score;          /* Auto-computed suitability score     */
+    bool fits_in_ram;     /* Can load with available RAM?       */
+} neuronos_model_entry_t;
+
+/* Scan a directory recursively for .gguf model files.
+ * Returns array of entries sorted by score (best first).
+ * Caller must free with neuronos_model_scan_free(). */
+neuronos_model_entry_t * neuronos_model_scan(const char * dir_path, const neuronos_hw_info_t * hw, int * out_count);
+
+void neuronos_model_scan_free(neuronos_model_entry_t * entries, int count);
+
+/* Select the best model from a scan result.
+ * Returns pointer into the entries array (do not free separately).
+ * Returns NULL if no model fits. */
+const neuronos_model_entry_t * neuronos_model_select_best(const neuronos_model_entry_t * entries, int count);
+
+/* ============================================================
+ * CONTEXT COMPACTION (inspired by Claude Code / OpenClaw)
+ *
+ * When context usage exceeds threshold, older conversation
+ * exchanges are summarized to free tokens.
+ * Pattern: "treat LLM context as cache, disk as source of truth"
+ * ============================================================ */
+
+typedef struct {
+    float trigger_ratio;    /* Compact when ctx usage > ratio (0.85)  */
+    int retention_window;   /* Keep last N exchanges verbatim (6)     */
+    int max_summary_tokens; /* Max tokens for the summary (256)       */
+    bool auto_compact;      /* Auto-trigger during agent_run (true)   */
+} neuronos_compact_params_t;
+
+/* Get current context token usage */
+int neuronos_context_token_count(const neuronos_agent_t * agent);
+
+/* Get context capacity */
+int neuronos_context_capacity(const neuronos_agent_t * agent);
+
+/* Get context usage ratio (0.0 - 1.0) */
+float neuronos_context_usage_ratio(const neuronos_agent_t * agent);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* NEURONOS_H */

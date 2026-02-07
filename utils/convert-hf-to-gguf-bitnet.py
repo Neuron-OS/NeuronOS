@@ -542,7 +542,7 @@ def preprocess_two_weights_tl2(M, K, weight_num, BM, BY, bm, by, weight, final_w
     weight = weight.reshape((M * K // bm // by, bm // 8, 8))
     weight[:, [0, 1, 2, 3], :] = weight[:, [0, 2, 1, 3], :]
     weight = weight.reshape(M * K // bm // by, bm)
-    
+
     for i in range(weight.shape[0]):
         final_weight.append(weight[i, :])
 
@@ -590,7 +590,7 @@ def preprocess_three_weights_tl2(M, K, weight_num, BM, BY, bm, by, weight, final
         combine_weight += temp_weight
     combine_weight = combine_weight.view(np.uint8)
     combine_weight = combine_weight.reshape((M * K // bm // (by * 4)), bm)
-    
+
     for i in range(combine_weight.shape[0]):
         final_weight.append(combine_weight[i, :])
 
@@ -952,13 +952,18 @@ class LlamaModel(Model):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@Model.register("BitnetForCausalLM")
+@Model.register("BitnetForCausalLM", "BitNetForCausalLM")
 class BitnetModel(Model):
     model_arch = gguf.MODEL_ARCH.BITNET
 
     def set_vocab(self):
-        self._set_vocab_sentencepiece()
-        
+        # BitNet-b1.58-2B-4T uses tiktoken (tokenizer.json), not sentencepiece
+        tokenizer_path = self.dir_model / "tokenizer.model"
+        if tokenizer_path.is_file():
+            self._set_vocab_sentencepiece()
+        else:
+            self._set_vocab_gpt2()
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
@@ -975,8 +980,12 @@ class BitnetModel(Model):
         return result.type(dtype)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # skip weight_scale tensors (BitNet-b1.58-2B-4T stores scales separately)
+        if name.endswith("weight_scale"):
+            return []
+
         # quant weight to i2 (in fp16)
-        if name.endswith(("q_proj.weight", "k_proj.weight", "v_proj.weight", 
+        if name.endswith(("q_proj.weight", "k_proj.weight", "v_proj.weight",
                           "down_proj.weight", "up_proj.weight", "gate_proj.weight",
                           "o_proj.weight")):
             data_torch = self.weight_quant(data_torch)

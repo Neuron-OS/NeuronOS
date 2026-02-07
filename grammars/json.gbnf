@@ -1,0 +1,27 @@
+# NeuronOS — Generic JSON grammar
+#
+# Forces the model to produce valid JSON.
+# Useful for any structured output requirement.
+
+root ::= ws value ws
+
+object ::= "{" ws "}" | "{" ws members ws "}"
+members ::= pair ( ws "," ws pair )*
+pair ::= string ws ":" ws value
+
+array ::= "[" ws "]" | "[" ws values ws "]"
+values ::= value ( ws "," ws value )*
+
+value ::= string | number | object | array | "true" | "false" | "null"
+
+string ::= "\"" characters "\""
+characters ::= "" | characters character
+character ::= [^"\\] | "\\" escape
+escape ::= ["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]
+
+number ::= integer fraction? exponent?
+integer ::= "-"? ( "0" | [1-9] [0-9]* )
+fraction ::= "." [0-9]+
+exponent ::= [eE] [+-]? [0-9]+
+
+ws ::= [ \t\n\r]*

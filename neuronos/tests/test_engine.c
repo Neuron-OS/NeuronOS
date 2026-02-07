@@ -1,0 +1,380 @@
+/* ============================================================
+ * NeuronOS — Engine & Agent Test Suite
+ *
+ * Tests:
+ *  1. Engine init/shutdown
+ *  2. Model load/free/info
+ *  3. Text generation (basic)
+ *  4. Text generation with GBNF grammar (JSON)
+ *  5. Tool registry operations
+ *  6. Tool execution (calculate)
+ *
+ * Usage: ./test_engine <path-to-gguf-model>
+ * ============================================================ */
+#include "neuronos/neuronos.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* ---- Helpers ---- */
+static int tests_run = 0;
+static int tests_passed = 0;
+static int tests_failed = 0;
+
+#define TEST_START(name)                                                                                               \
+    do {                                                                                                               \
+        tests_run++;                                                                                                   \
+        fprintf(stderr, "\n[TEST %d] %s... ", tests_run, name);                                                        \
+    } while (0)
+
+#define TEST_PASS()                                                                                                    \
+    do {                                                                                                               \
+        tests_passed++;                                                                                                \
+        fprintf(stderr, "PASS ✓\n");                                                                                   \
+    } while (0)
+
+#define TEST_FAIL(msg)                                                                                                 \
+    do {                                                                                                               \
+        tests_failed++;                                                                                                \
+        fprintf(stderr, "FAIL ✗ (%s)\n", msg);                                                                         \
+    } while (0)
+
+#define ASSERT(cond, msg)                                                                                              \
+    do {                                                                                                               \
+        if (!(cond)) {                                                                                                 \
+            TEST_FAIL(msg);                                                                                            \
+            return;                                                                                                    \
+        }                                                                                                              \
+    } while (0)
+
+/* ---- Globals ---- */
+static const char * g_model_path = NULL;
+
+/* ============================================================
+ * TEST 1: Engine init/shutdown
+ * ============================================================ */
+static void test_engine_init(void) {
+    TEST_START("Engine init/shutdown");
+
+    /* Verify version */
+    const char * ver = neuronos_version();
+    ASSERT(ver != NULL, "version is NULL");
+    ASSERT(strcmp(ver, "0.4.0") == 0, "version mismatch");
+
+    /* Init engine */
+    neuronos_engine_params_t params = {
+        .n_threads = 4,
+        .n_gpu_layers = 0,
+        .verbose = true,
+    };
+    neuronos_engine_t * engine = neuronos_init(params);
+    ASSERT(engine != NULL, "engine is NULL");
+
+    /* Shutdown */
+    neuronos_shutdown(engine);
+
+    TEST_PASS();
+}
+
+/* ============================================================
+ * TEST 2: Model load/free/info
+ * ============================================================ */
+static neuronos_engine_t * g_engine = NULL;
+static neuronos_model_t * g_model = NULL;
+
+static void test_model_load(void) {
+    TEST_START("Model load/info/free");
+
+    if (!g_model_path) {
+        fprintf(stderr, "SKIP (no model path)");
+        tests_run--; /* don't count as run */
+        return;
+    }
+
+    neuronos_engine_params_t eparams = {
+        .n_threads = 4,
+        .n_gpu_layers = 0,
+        .verbose = true,
+    };
+    g_engine = neuronos_init(eparams);
+    ASSERT(g_engine != NULL, "engine init failed");
+
+    neuronos_model_params_t mparams = {
+        .model_path = g_model_path,
+        .context_size = 2048,
+        .use_mmap = true,
+    };
+    g_model = neuronos_model_load(g_engine, mparams);
+    ASSERT(g_model != NULL, "model load failed");
+
+    /* Check info */
+    neuronos_model_info_t info = neuronos_model_info(g_model);
+    ASSERT(info.n_params > 0, "n_params should be > 0");
+    ASSERT(info.n_vocab > 0, "n_vocab should be > 0");
+    ASSERT(info.n_embd > 0, "n_embd should be > 0");
+
+    fprintf(stderr, "\n  Model: %s, params=%lldM, vocab=%d, embd=%d", info.description,
+            (long long)(info.n_params / 1000000), info.n_vocab, info.n_embd);
+
+    TEST_PASS();
+}
+
+/* ============================================================
+ * TEST 3: Basic text generation
+ * ============================================================ */
+static void test_generate_basic(void) {
+    TEST_START("Basic text generation");
+
+    if (!g_model) {
+        fprintf(stderr, "SKIP (model not loaded)");
+        tests_run--;
+        return;
+    }
+
+    neuronos_gen_params_t params = {
+        .prompt = "Hello, my name is",
+        .max_tokens = 32,
+        .temperature = 0.7f,
+        .top_p = 0.95f,
+        .top_k = 40,
+        .grammar = NULL,
+        .on_token = NULL,
+        .seed = 42,
+    };
+
+    neuronos_gen_result_t result = neuronos_generate(g_model, params);
+    ASSERT(result.status == NEURONOS_OK, "generation failed");
+    ASSERT(result.text != NULL, "text is NULL");
+    ASSERT(result.n_tokens > 0, "no tokens generated");
+    ASSERT(result.tokens_per_s > 0.0, "speed should be > 0");
+
+    fprintf(stderr, "\n  Generated %d tokens (%.2f t/s): \"%.80s%s\"", result.n_tokens, result.tokens_per_s,
+            result.text, strlen(result.text) > 80 ? "..." : "");
+
+    neuronos_gen_result_free(&result);
+    TEST_PASS();
+}
+
+/* ============================================================
+ * TEST 4: Grammar-constrained generation (JSON)
+ * ============================================================ */
+static void test_generate_grammar(void) {
+    TEST_START("Grammar-constrained JSON generation");
+
+    if (!g_model) {
+        fprintf(stderr, "SKIP (model not loaded)");
+        tests_run--;
+        return;
+    }
+
+    /* Simple JSON grammar */
+    const char * json_grammar = "root ::= \"{\" ws \"\\\"name\\\"\" ws \":\" ws string ws \"}\"\n"
+                                "string ::= \"\\\"\" [a-zA-Z ]+ \"\\\"\"\n"
+                                "ws ::= [ \\t\\n]*\n";
+
+    neuronos_gen_params_t params = {
+        .prompt = "Generate a JSON object with a name field:",
+        .max_tokens = 64,
+        .temperature = 0.5f,
+        .top_p = 0.95f,
+        .top_k = 40,
+        .grammar = json_grammar,
+        .grammar_root = "root",
+        .on_token = NULL,
+        .seed = 42,
+    };
+
+    neuronos_gen_result_t result = neuronos_generate(g_model, params);
+    ASSERT(result.status == NEURONOS_OK, "generation failed");
+    ASSERT(result.text != NULL, "text is NULL");
+
+    /* Verify it's valid JSON: starts with { and ends with } */
+    const char * text = result.text;
+    /* Skip leading whitespace */
+    while (*text == ' ' || *text == '\n' || *text == '\t')
+        text++;
+    ASSERT(text[0] == '{', "output doesn't start with {");
+
+    fprintf(stderr, "\n  Grammar output: %s", result.text);
+
+    neuronos_gen_result_free(&result);
+    TEST_PASS();
+}
+
+/* ============================================================
+ * TEST 5: Tool registry
+ * ============================================================ */
+static void test_tool_registry(void) {
+    TEST_START("Tool registry operations");
+
+    neuronos_tool_registry_t * reg = neuronos_tool_registry_create();
+    ASSERT(reg != NULL, "registry is NULL");
+    ASSERT(neuronos_tool_count(reg) == 0, "should start empty");
+
+    /* Register defaults with filesystem + shell caps */
+    int n = neuronos_tool_register_defaults(reg, NEURONOS_CAP_FILESYSTEM | NEURONOS_CAP_SHELL);
+    ASSERT(n > 0, "should register some tools");
+    ASSERT(neuronos_tool_count(reg) >= 3, "should have >= 3 tools");
+
+    /* Verify tool names */
+    fprintf(stderr, "\n  Registered tools (%d):", neuronos_tool_count(reg));
+    for (int i = 0; i < neuronos_tool_count(reg); i++) {
+        const char * name = neuronos_tool_name(reg, i);
+        ASSERT(name != NULL, "tool name is NULL");
+        fprintf(stderr, " %s", name);
+    }
+
+    /* Test grammar generation */
+    char * grammar = neuronos_tool_grammar_names(reg);
+    ASSERT(grammar != NULL, "grammar is NULL");
+    ASSERT(strstr(grammar, "tool-name") != NULL, "grammar should contain tool-name");
+    fprintf(stderr, "\n  Grammar: %s", grammar);
+    free(grammar);
+
+    /* Test prompt description */
+    char * desc = neuronos_tool_prompt_description(reg);
+    ASSERT(desc != NULL, "description is NULL");
+    ASSERT(strstr(desc, "shell") != NULL, "should mention shell");
+    free(desc);
+
+    neuronos_tool_registry_free(reg);
+    TEST_PASS();
+}
+
+/* ============================================================
+ * TEST 6: Tool execution (calculate)
+ * ============================================================ */
+static void test_tool_execute(void) {
+    TEST_START("Tool execution (calculate)");
+
+    neuronos_tool_registry_t * reg = neuronos_tool_registry_create();
+    neuronos_tool_register_defaults(reg, NEURONOS_CAP_ALL);
+
+    /* Test calculate */
+    neuronos_tool_result_t result = neuronos_tool_execute(reg, "calculate", "{\"expression\": \"2+2\"}");
+
+    ASSERT(result.success, "calculate should succeed");
+    ASSERT(result.output != NULL, "output should not be NULL");
+    ASSERT(strstr(result.output, "4") != NULL, "2+2 should be 4");
+    fprintf(stderr, "\n  calculate(2+2) = %s", result.output);
+
+    neuronos_tool_result_free(&result);
+
+    /* Test unknown tool */
+    neuronos_tool_result_t r2 = neuronos_tool_execute(reg, "nonexistent", "{}");
+    ASSERT(!r2.success, "unknown tool should fail");
+    neuronos_tool_result_free(&r2);
+
+    neuronos_tool_registry_free(reg);
+    TEST_PASS();
+}
+
+/* ============================================================
+ * TEST 7: Hardware detection
+ * ============================================================ */
+static void test_hardware_detection(void) {
+    TEST_START("Hardware detection");
+
+    neuronos_hw_info_t hw = neuronos_detect_hardware();
+
+    ASSERT(hw.ram_total_mb > 0, "should detect RAM");
+    ASSERT(hw.ram_available_mb > 0, "should detect available RAM");
+    ASSERT(hw.n_cores_logical > 0, "should detect cores");
+    ASSERT(hw.n_cores_physical > 0, "should detect physical cores");
+    ASSERT(hw.model_budget_mb > 0, "should compute model budget");
+    ASSERT(strlen(hw.arch) > 0, "should detect architecture");
+
+    fprintf(stderr, "\n  CPU: %s", hw.cpu_name);
+    fprintf(stderr, "\n  Arch: %s", hw.arch);
+    fprintf(stderr, "\n  Cores: %d/%d (phys/logical)", hw.n_cores_physical, hw.n_cores_logical);
+    fprintf(stderr, "\n  RAM: %lld MB total, %lld MB available", (long long)hw.ram_total_mb,
+            (long long)hw.ram_available_mb);
+    fprintf(stderr, "\n  Budget: %lld MB for models", (long long)hw.model_budget_mb);
+    fprintf(stderr, "\n  Features: 0x%08X", hw.features);
+
+    TEST_PASS();
+}
+
+/* ============================================================
+ * TEST 8: Model scanner
+ * ============================================================ */
+static void test_model_scanner(void) {
+    TEST_START("Model scanner");
+
+    neuronos_hw_info_t hw = neuronos_detect_hardware();
+
+    /* Try to scan the models directory */
+    int count = 0;
+    neuronos_model_entry_t * models = neuronos_model_scan("../../models", &hw, &count);
+
+    if (models && count > 0) {
+        fprintf(stderr, "\n  Found %d model(s):", count);
+        for (int i = 0; i < count; i++) {
+            fprintf(stderr, "\n    [%d] %s (%.0f MB, score=%.1f, fits=%s)", i + 1, models[i].name,
+                    (double)models[i].file_size_mb, models[i].score, models[i].fits_in_ram ? "yes" : "no");
+        }
+
+        const neuronos_model_entry_t * best = neuronos_model_select_best(models, count);
+        if (best) {
+            fprintf(stderr, "\n  Best: %s (score=%.1f)", best->name, best->score);
+            ASSERT(best->score > 0, "best model should have positive score");
+            ASSERT(best->fits_in_ram, "best model must fit in RAM");
+        }
+
+        neuronos_model_scan_free(models, count);
+    } else {
+        fprintf(stderr, "\n  No models directory found (OK in CI)");
+    }
+
+    /* Test with nonexistent directory */
+    int count2 = 0;
+    neuronos_model_entry_t * none = neuronos_model_scan("/nonexistent", &hw, &count2);
+    ASSERT(none == NULL, "nonexistent dir should return NULL");
+    ASSERT(count2 == 0, "nonexistent dir should return 0 count");
+
+    TEST_PASS();
+}
+
+/* ============================================================
+ * MAIN
+ * ============================================================ */
+int main(int argc, char * argv[]) {
+    fprintf(stderr, "═══════════════════════════════════════════\n");
+    fprintf(stderr, "  NeuronOS Engine & Agent Test Suite v0.4\n");
+    fprintf(stderr, "═══════════════════════════════════════════\n");
+
+    if (argc > 1) {
+        g_model_path = argv[1];
+        fprintf(stderr, "Model: %s\n", g_model_path);
+    } else {
+        fprintf(stderr, "Usage: %s <model.gguf>\n", argv[0]);
+        fprintf(stderr, "  (running without model — inference tests skipped)\n");
+    }
+
+    /* Run tests */
+    test_engine_init();
+    test_model_load();
+    test_generate_basic();
+    test_generate_grammar();
+    test_tool_registry();
+    test_tool_execute();
+    test_hardware_detection();
+    test_model_scanner();
+
+    /* Cleanup model if loaded */
+    if (g_model)
+        neuronos_model_free(g_model);
+    if (g_engine)
+        neuronos_shutdown(g_engine);
+
+    /* Summary */
+    fprintf(stderr, "\n═══════════════════════════════════════════\n");
+    fprintf(stderr, "  Results: %d/%d passed", tests_passed, tests_run);
+    if (tests_failed > 0) {
+        fprintf(stderr, " (%d FAILED)", tests_failed);
+    }
+    fprintf(stderr, "\n═══════════════════════════════════════════\n");
+
+    return tests_failed > 0 ? 1 : 0;
+}

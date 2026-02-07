@@ -1,0 +1,183 @@
+##
+## NeuronOS — Cross-Platform CI
+##
+## Tier 1: Native (x86_64 Linux, ARM64 Linux)
+## Tier 2: QEMU emulation (RISC-V 64)
+## Tier 3: Special (WASM via Emscripten) — compile-only
+##
+## Tests are split into:
+##   - compile-only: Just build (all platforms)
+##   - unit-no-model: HAL, tools, JSON (all platforms)
+##   - unit-with-model: Inference, grammar, agent (x86_64 only)
+##
+name: NeuronOS CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'neuronos/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'neuronos/**'
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  # ═══════════════════════════════════════════════════════
+  # Tier 1: Native x86_64 Linux (primary)
+  # ═══════════════════════════════════════════════════════
+  linux-x86_64:
+    name: Linux x86_64 (clang)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake bc
+
+      - name: Build parent BitNet
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DBITNET_X86_TL2=OFF
+          cmake --build build -j$(nproc)
+
+      - name: Build NeuronOS
+        run: |
+          cd neuronos/neuronos
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+            -DCMAKE_C_COMPILER=clang
+          cmake --build build -j$(nproc)
+
+      - name: Run unit tests (no model)
+        run: |
+          cd neuronos/neuronos/build
+          export LD_LIBRARY_PATH=../../build/3rdparty/llama.cpp/src:../../build/3rdparty/llama.cpp/ggml/src
+          ./test_hal
+          echo "HAL tests passed"
+
+      - name: Run hwinfo & scan
+        run: |
+          cd neuronos/neuronos/build
+          export LD_LIBRARY_PATH=../../build/3rdparty/llama.cpp/src:../../build/3rdparty/llama.cpp/ggml/src
+          ./neuronos-cli hwinfo
+          echo "Hardware detection passed"
+
+  # ═══════════════════════════════════════════════════════
+  # Tier 1: Native ARM64 Linux
+  # ═══════════════════════════════════════════════════════
+  linux-arm64:
+    name: Linux ARM64 (gcc)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc g++ cmake bc
+
+      - name: Build parent BitNet
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+            -DBITNET_X86_TL2=OFF
+          cmake --build build -j$(nproc)
+
+      - name: Build NeuronOS
+        run: |
+          cd neuronos/neuronos
+          cmake -B build -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+          cmake --build build -j$(nproc)
+
+      - name: Run unit tests (no model)
+        run: |
+          cd neuronos/neuronos/build
+          export LD_LIBRARY_PATH=../../build/3rdparty/llama.cpp/src:../../build/3rdparty/llama.cpp/ggml/src
+          ./test_hal
+          ./neuronos-cli hwinfo
+
+  # ═══════════════════════════════════════════════════════
+  # Tier 2: RISC-V 64 via QEMU
+  # ═══════════════════════════════════════════════════════
+  riscv64-qemu:
+    name: RISC-V 64 (QEMU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: uraimo/run-on-arch-action@v3
+        with:
+          arch: riscv64
+          distro: ubuntu24.04
+          githubToken: ${{ github.token }}
+          dockerRunArgs: |
+            --volume "${PWD}:/opt/neuronos"
+          install: |
+            apt-get update
+            apt-get install -y gcc g++ cmake bc
+          run: |
+            cd /opt/neuronos
+            # Build parent (scalar-only, no SIMD)
+            cmake -B build \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DBITNET_X86_TL2=OFF
+            cmake --build build -j$(nproc)
+
+            # Build NeuronOS
+            cd neuronos/neuronos
+            cmake -B build -DCMAKE_BUILD_TYPE=Release
+            cmake --build build -j$(nproc)
+
+            # Run HAL test (scalar backend)
+            cd build
+            export LD_LIBRARY_PATH=../../build/3rdparty/llama.cpp/src:../../build/3rdparty/llama.cpp/ggml/src
+            ./test_hal
+            echo "RISC-V build + HAL test passed!"
+
+  # ═══════════════════════════════════════════════════════
+  # Compile-only check for code quality
+  # ═══════════════════════════════════════════════════════
+  compile-warnings:
+    name: Compile with -Werror
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang cmake
+
+      - name: Build parent BitNet
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DBITNET_X86_TL2=OFF
+          cmake --build build -j$(nproc)
+
+      - name: Build NeuronOS with -Werror
+        run: |
+          cd neuronos/neuronos
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_C_FLAGS="-Werror"
+          cmake --build build -j$(nproc)
