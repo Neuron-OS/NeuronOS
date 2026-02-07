@@ -177,7 +177,7 @@ jobs:
   riscv64-qemu:
     name: RISC-V 64 (QEMU)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -199,10 +199,14 @@ jobs:
 
             # Build parent (scalar-only, no SIMD)
             # Use -j2 instead of -j$(nproc) because QEMU emulation is slow with high parallelism
+            # Disable examples/tests/server to speed up build (only need libs for NeuronOS)
             cmake -B build \
               -DCMAKE_BUILD_TYPE=Release \
-              -DBITNET_X86_TL2=OFF
-            cmake --build build -j2
+              -DBITNET_X86_TL2=OFF \
+              -DLLAMA_BUILD_EXAMPLES=OFF \
+              -DLLAMA_BUILD_TESTS=OFF \
+              -DLLAMA_BUILD_SERVER=OFF
+            cmake --build build --target llama ggml -j2
 
             # Build NeuronOS
             cd neuronos

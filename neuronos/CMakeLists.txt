@@ -38,7 +38,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
 endif()
 
 add_library(neuronos_hal STATIC ${HAL_SOURCES})
-target_include_directories(neuronos_hal 
+target_include_directories(neuronos_hal
     PUBLIC ${NEURONOS_INCLUDE_DIR}
     PRIVATE ${LLAMA_SRC_DIR}/include
     PRIVATE ${LLAMA_SRC_DIR}/ggml/include
