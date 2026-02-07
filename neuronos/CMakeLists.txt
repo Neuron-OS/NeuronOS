@@ -38,7 +38,19 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
 endif()
 
 add_library(neuronos_hal STATIC ${HAL_SOURCES})
-target_include_directories(neuronos_hal PUBLIC ${NEURONOS_INCLUDE_DIR})
+target_include_directories(neuronos_hal 
+    PUBLIC ${NEURONOS_INCLUDE_DIR}
+    PRIVATE ${LLAMA_SRC_DIR}/include
+    PRIVATE ${LLAMA_SRC_DIR}/ggml/include
+    PRIVATE ${LLAMA_SRC_DIR}/src
+)
+
+# Link against llama.cpp libs (needed for SIMD backends that call BitNet kernels)
+target_link_directories(neuronos_hal PUBLIC
+    ${LLAMA_BUILD_DIR}/src
+    ${LLAMA_BUILD_DIR}/ggml/src
+)
+target_link_libraries(neuronos_hal PUBLIC llama ggml)
 
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(neuronos_hal PRIVATE

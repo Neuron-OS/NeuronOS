@@ -177,6 +177,7 @@ jobs:
   riscv64-qemu:
     name: RISC-V 64 (QEMU)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -197,15 +198,16 @@ jobs:
             echo "Building on RISC-V 64 (scalar fallback)..."
 
             # Build parent (scalar-only, no SIMD)
+            # Use -j2 instead of -j$(nproc) because QEMU emulation is slow with high parallelism
             cmake -B build \
               -DCMAKE_BUILD_TYPE=Release \
               -DBITNET_X86_TL2=OFF
-            cmake --build build -j$(nproc)
+            cmake --build build -j2
 
             # Build NeuronOS
             cd neuronos
             cmake -B build -DCMAKE_BUILD_TYPE=Release
-            cmake --build build -j$(nproc)
+            cmake --build build -j2
 
             # Run HAL test (scalar backend)
             cd build
