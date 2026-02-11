@@ -1,0 +1,201 @@
+##
+## NeuronOS — Build, Test & Release
+##
+## Single pipeline for everything:
+##   - Every push/PR: build + test on all 3 platforms
+##   - Tag v*: also creates GitHub Release with tarballs
+##
+## Platforms: Linux x86_64, Linux ARM64, macOS ARM64
+## All builds use static linking (BUILD_SHARED_LIBS=OFF)
+##
+name: Build
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════
+  # Build + Test + Package (3 platforms)
+  # ═══════════════════════════════════════════════════════════════
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-22.04
+            cc: gcc
+            cxx: g++
+            run_hal: true
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            cc: gcc
+            cxx: g++
+            run_hal: true
+          - name: macos-arm64
+            os: macos-14
+            cc: clang
+            cxx: clang++
+            run_hal: false
+
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake
+
+      - name: Determine version
+        id: ver
+        run: |
+          VER=$(grep -oP '#define NEURONOS_VERSION_STRING\s+"\K[^"]+' \
+            neuronos/include/neuronos/neuronos.h 2>/dev/null || echo "0.0.0")
+          echo "version=$VER" >> $GITHUB_OUTPUT
+
+      # ── Build ──
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=${{ matrix.cc }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -DBITNET_X86_TL2=OFF \
+            -DBUILD_SHARED_LIBS=OFF
+
+      - name: Compile
+        run: cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      # ── Verify ──
+      - name: Verify static linking
+        if: runner.os == 'Linux'
+        run: |
+          ldd build/bin/neuronos-cli
+          if ldd build/bin/neuronos-cli | grep -q libllama; then
+            echo "::error::Binary is dynamically linked to libllama!"
+            exit 1
+          fi
+
+      # ── Test ──
+      - name: test_hal
+        if: matrix.run_hal
+        run: ./build/bin/test_hal
+
+      - name: test_memory
+        run: ./build/bin/test_memory
+
+      - name: test_engine
+        run: ./build/bin/test_engine
+
+      - name: hwinfo
+        run: ./build/bin/neuronos-cli hwinfo
+
+      # ── Package ──
+      - name: Package tarball
+        run: |
+          chmod +x scripts/package-release.sh
+          ./scripts/package-release.sh "${{ steps.ver.outputs.version }}" build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: neuronos-v*.tar.gz
+          retention-days: 30
+
+      # ── Summary ──
+      - name: Summary
+        if: always()
+        run: |
+          echo "## ${{ matrix.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Arch | $(uname -m) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Binary | $(du -h build/bin/neuronos-cli | cut -f1) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | ${{ steps.ver.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          TARBALL=$(ls neuronos-v*.tar.gz 2>/dev/null | head -1)
+          if [ -n "$TARBALL" ]; then
+            echo "| Tarball | $(du -h "$TARBALL" | cut -f1) |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ═══════════════════════════════════════════════════════════════
+  # Publish GitHub Release (only on tag push v*)
+  # ═══════════════════════════════════════════════════════════════
+  release:
+    name: Publish Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Collect tarballs
+        run: |
+          mkdir -p release-files
+          find artifacts/ -name "*.tar.gz" -exec cp {} release-files/ \;
+          echo "=== Release files ==="
+          ls -lh release-files/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: NeuronOS v${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          body: |
+            ## NeuronOS v${{ steps.ver.outputs.version }}
+
+            Universal AI agent engine for edge devices.
+
+            ### Install
+
+            ```bash
+            # With gh CLI (works for private repos):
+            bash <(gh api repos/${{ github.repository }}/contents/scripts/install.sh --jq '.content' | base64 -d)
+            ```
+
+            ### Download
+
+            | Platform | File |
+            |----------|------|
+            | Linux x86_64 | `neuronos-v${{ steps.ver.outputs.version }}-linux-x86_64.tar.gz` |
+            | Linux ARM64 | `neuronos-v${{ steps.ver.outputs.version }}-linux-arm64.tar.gz` |
+            | macOS ARM64 | `neuronos-v${{ steps.ver.outputs.version }}-macos-arm64.tar.gz` |
+
+            ### Quick Start
+
+            ```bash
+            tar xzf neuronos-v*.tar.gz && cd neuronos-v*/
+            # Download model (~1.7 GB)
+            curl -L -o model.gguf https://huggingface.co/microsoft/BitNet-b1.58-2B-4T-gguf/resolve/main/ggml-model-i2_s.gguf
+            ./bin/neuronos-cli model.gguf chat
+            ```
+          files: release-files/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
