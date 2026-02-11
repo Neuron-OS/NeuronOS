@@ -26,6 +26,8 @@
 typedef SOCKET socket_t;
     #define INVALID_SOCK INVALID_SOCKET
     #define close_socket closesocket
+    /* MSVC/Clang-cl don't define ssize_t — use the Windows SDK equivalent */
+    typedef SSIZE_T ssize_t;
 #else
     #include <arpa/inet.h>
     #include <netinet/in.h>

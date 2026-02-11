@@ -601,9 +601,16 @@ static neuronos_tool_result_t tool_calculate(const char * args_json, void * user
         return result;
     }
 
-    /* Build command: echo 'EXPR' | bc -l */
+    /* Build command: platform-specific math evaluation */
     char cmd[512];
+#ifdef _WIN32
+    /* Windows: use PowerShell for math evaluation */
+    snprintf(cmd, sizeof(cmd),
+             "powershell -NoProfile -Command \"[Math]::Round((%.*s), 10)\"",
+             (int)expr_len, expr_start);
+#else
     snprintf(cmd, sizeof(cmd), "echo '%.*s' | bc -l 2>&1", (int)expr_len, expr_start);
+#endif
 
     FILE * fp = popen(cmd, "r");
     if (!fp) {
@@ -783,10 +790,17 @@ static neuronos_tool_result_t tool_search_files(const char * args_json, void * u
         return result;
     }
 
-    /* Use find command for file search */
+    /* Use platform-specific file search */
     char cmd[1024];
+#ifdef _WIN32
+    /* Windows: use dir /S /B with wildcard matching */
+    snprintf(cmd, sizeof(cmd),
+             "cmd /C \"dir /S /B \"%s\\%.*s\" 2>NUL\"",
+             dir, (int)plen, pat_start);
+#else
     snprintf(cmd, sizeof(cmd), "find \"%s\" -maxdepth 4 -name '%.*s' -type f 2>/dev/null | head -20", dir, (int)plen,
              pat_start);
+#endif
 
     FILE * fp = popen(cmd, "r");
     if (!fp) {
@@ -863,10 +877,17 @@ static neuronos_tool_result_t tool_http_get(const char * args_json, void * user_
 
     /* Use curl for HTTP request (timeout 10s, max 32KB) */
     char cmd[2048];
+#ifdef _WIN32
+    snprintf(cmd, sizeof(cmd),
+             "curl -sL --max-time 10 --max-filesize 32768 "
+             "-H \"User-Agent: NeuronOS/%s\" \"%.*s\" 2>NUL",
+             NEURONOS_VERSION_STRING, (int)ulen, url_start);
+#else
     snprintf(cmd, sizeof(cmd),
              "curl -sL --max-time 10 --max-filesize 32768 "
              "-H 'User-Agent: NeuronOS/%s' '%.*s' 2>/dev/null | head -c 32768",
              NEURONOS_VERSION_STRING, (int)ulen, url_start);
+#endif
 
     FILE * fp = popen(cmd, "r");
     if (!fp) {
@@ -1167,16 +1188,28 @@ static neuronos_tool_result_t tool_read_pdf(const char * args_json, void * user_
         }
     }
 
-    /* Build pdftotext command */
+    /* Build pdftotext command (platform-specific shell quoting) */
     char cmd[2048];
     if (first_page > 0) {
+#ifdef _WIN32
+        snprintf(cmd, sizeof(cmd),
+                 "pdftotext -f %d -l %d -layout \"%s\" - 2>NUL",
+                 first_page, last_page, path);
+#else
         snprintf(cmd, sizeof(cmd),
                  "pdftotext -f %d -l %d -layout '%s' - 2>/dev/null",
                  first_page, last_page, path);
+#endif
     } else {
+#ifdef _WIN32
+        snprintf(cmd, sizeof(cmd),
+                 "pdftotext -layout \"%s\" - 2>NUL",
+                 path);
+#else
         snprintf(cmd, sizeof(cmd),
                  "pdftotext -layout '%s' - 2>/dev/null",
                  path);
+#endif
     }
 
     FILE * fp = popen(cmd, "r");
