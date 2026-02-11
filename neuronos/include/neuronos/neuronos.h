@@ -577,12 +577,19 @@ void neuronos_auto_release(neuronos_auto_ctx_t * ctx);
  *   POST /v1/completions
  *   GET  /v1/models
  *   GET  /health
+ *   POST /api/chat            (agent mode: interactive agent with tools)
+ *   GET  /                    (agent mode: embedded chat UI)
  * ============================================================ */
 
 typedef struct {
     const char * host; /* "0.0.0.0" or "127.0.0.1" (default)     */
     int port;          /* Default: 8080                           */
     bool cors;         /* Enable CORS for browser clients          */
+
+    /* Agent mode: if agent is non-NULL, serves embedded chat UI at /
+     * and interactive agent endpoint at POST /api/chat with SSE streaming
+     * of thinking steps + tool use + final response. */
+    neuronos_agent_t * agent; /* NULL = raw inference only          */
 } neuronos_server_params_t;
 
 /* Start HTTP server (blocking). Returns status on exit. */

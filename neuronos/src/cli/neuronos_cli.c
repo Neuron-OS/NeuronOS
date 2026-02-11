@@ -1,11 +1,16 @@
 /* ============================================================
- * NeuronOS CLI v0.7.0 — Universal AI Agent Interface
+ * NeuronOS CLI v0.9.0 — Universal AI Agent Interface
  *
  * ZERO-ARG: Just run `neuronos` → auto-configures everything.
- * Detects hardware, finds best model, tunes params, starts REPL.
+ * Detects hardware, finds best model, tunes params, starts agent.
+ *
+ * Context-aware launch:
+ *   Terminal (TTY)   → Interactive REPL with agent
+ *   No TTY / GUI     → HTTP server + browser chat UI
  *
  * Modes:
- *   neuronos                        Interactive REPL (auto-config)
+ *   neuronos                        Interactive agent (auto-detect)
+ *   neuronos ui                     Open browser chat UI
  *   neuronos run "prompt"           One-shot generation
  *   neuronos agent "task"           One-shot agent with tools
  *   neuronos serve                  HTTP server (OpenAI-compatible)
@@ -70,7 +75,8 @@ static void print_usage(const char * prog) {
     fprintf(stderr,
             "NeuronOS v%s — Universal AI Agent Engine\n\n"
             "Usage:\n"
-            "  %s                              Auto-config + interactive REPL\n"
+            "  %s                              Auto-detect: REPL or chat UI\n"
+            "  %s ui                            Open browser chat UI\n"
             "  %s run \"prompt\"                  One-shot text generation\n"
             "  %s agent \"task\"                  One-shot agent with tools\n"
             "  %s serve [--port 8080]           HTTP server (OpenAI API)\n"
@@ -91,11 +97,11 @@ static void print_usage(const char * prog) {
             "  --grammar <file> GBNF grammar file\n"
             "  --models <dir>   Additional model search directory\n"
             "  --host <addr>    Server bind address (default: 127.0.0.1)\n"
-            "  --port <port>    Server port (default: 8080)\n"
+            "  --port <port>    Server port (default: 8384)\n"
             "  --mcp <file>     MCP client config (default: ~/.neuronos/mcp.json)\n"
             "  --verbose        Show debug info\n"
             "  --help           Show this help\n",
-            NEURONOS_VERSION_STRING, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog);
+            NEURONOS_VERSION_STRING, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog);
 }
 
 /* ---- Auto-download model when none found ---- */
@@ -271,6 +277,128 @@ static char * load_grammar_file(const char * path) {
     }
     fclose(fp);
     return buf;
+}
+
+/* ---- Open default browser (cross-platform) ---- */
+static void open_browser(const char * url) {
+    char cmd[1024];
+#if defined(_WIN32)
+    snprintf(cmd, sizeof(cmd), "start \"\" \"%s\"", url);
+#elif defined(__APPLE__)
+    snprintf(cmd, sizeof(cmd), "open \"%s\"", url);
+#else
+    snprintf(cmd, sizeof(cmd), "xdg-open \"%s\" >/dev/null 2>&1 &", url);
+#endif
+    (void)system(cmd);
+}
+
+/* ---- UI mode: Start HTTP server with embedded chat UI + open browser ---- */
+static int cmd_ui_with_model(neuronos_model_t * model, int max_tokens, int max_steps,
+                             float temperature, bool verbose, const char * mcp_config_path,
+                             const char * host, int port) {
+    fprintf(stderr,
+            "\033[36m"
+            "╔══════════════════════════════════════════════╗\n"
+            "║  NeuronOS v%-6s — Chat UI Mode            ║\n"
+            "║  Starting agent with embedded chat UI...     ║\n"
+            "╚══════════════════════════════════════════════╝\n"
+            "\033[0m",
+            NEURONOS_VERSION_STRING);
+
+    /* Open persistent memory */
+    neuronos_memory_t * mem = neuronos_memory_open(NULL);
+    if (mem) {
+        int fact_count = 0;
+        neuronos_memory_archival_stats(mem, &fact_count);
+        fprintf(stderr, "Memory: SQLite (persistent, %d facts stored)\n", fact_count);
+    }
+
+    /* Tool registry */
+    neuronos_tool_registry_t * tools = neuronos_tool_registry_create();
+    neuronos_tool_register_defaults(tools, NEURONOS_CAP_FILESYSTEM | NEURONOS_CAP_NETWORK | NEURONOS_CAP_SHELL);
+    if (mem) {
+        neuronos_tool_register_memory(tools, mem);
+    }
+
+    /* MCP Client */
+    neuronos_mcp_client_t * mcp_client = NULL;
+    {
+        const char * cfg = mcp_config_path;
+        char default_path[512] = {0};
+        if (!cfg) {
+            const char * home = getenv("HOME");
+#ifdef _WIN32
+            if (!home) home = getenv("USERPROFILE");
+#endif
+            if (home) {
+                snprintf(default_path, sizeof(default_path), "%s/.neuronos/mcp.json", home);
+                FILE * f = fopen(default_path, "r");
+                if (f) {
+                    fclose(f);
+                    cfg = default_path;
+                }
+            }
+        }
+        if (cfg) {
+            mcp_client = neuronos_mcp_client_create();
+            if (mcp_client) {
+                int loaded = neuronos_mcp_client_load_config(mcp_client, cfg);
+                if (loaded > 0) {
+                    neuronos_mcp_client_connect(mcp_client);
+                    int mcp_tools = neuronos_mcp_client_register_tools(mcp_client, tools);
+                    fprintf(stderr, "MCP: %d external tools from %d server(s)\n", mcp_tools, loaded);
+                } else {
+                    neuronos_mcp_client_free(mcp_client);
+                    mcp_client = NULL;
+                }
+            }
+        }
+    }
+
+    /* Create agent */
+    neuronos_agent_params_t aparams = {
+        .max_steps = max_steps,
+        .max_tokens_per_step = max_tokens,
+        .temperature = temperature,
+        .verbose = verbose,
+    };
+    neuronos_agent_t * agent = neuronos_agent_create(model, tools, aparams);
+    if (!agent) {
+        fprintf(stderr, "Error: Failed to create agent\n");
+        neuronos_tool_registry_free(tools);
+        if (mcp_client) neuronos_mcp_client_free(mcp_client);
+        if (mem) neuronos_memory_close(mem);
+        return 1;
+    }
+    if (mem) {
+        neuronos_agent_set_memory(agent, mem);
+    }
+
+    fprintf(stderr, "Tools: %d registered%s\n", neuronos_tool_count(tools),
+            mem ? " | Memory: active" : "");
+
+    /* Open browser */
+    char url[256];
+    snprintf(url, sizeof(url), "http://%s:%d", host, port);
+    fprintf(stderr, "Opening %s in your browser...\n", url);
+    open_browser(url);
+
+    /* Start server (blocking) — agent mode */
+    neuronos_server_params_t sparams = {
+        .host = host,
+        .port = port,
+        .cors = true,
+        .agent = agent,
+    };
+    neuronos_status_t status = neuronos_server_start(model, tools, sparams);
+
+    /* Cleanup */
+    neuronos_agent_free(agent);
+    neuronos_tool_registry_free(tools);
+    if (mcp_client) neuronos_mcp_client_free(mcp_client);
+    if (mem) neuronos_memory_close(mem);
+
+    return (status == NEURONOS_OK) ? 0 : 1;
 }
 
 /* ---- Run generate command ---- */
@@ -790,7 +918,7 @@ int main(int argc, char * argv[]) {
     const char * grammar_file = NULL;
     const char * extra_models = NULL;
     const char * host = "127.0.0.1";
-    int port = 8080;
+    int port = 8384;
     bool verbose = false;
     const char * mcp_config = NULL; /* --mcp <config.json> for MCP client */
 
@@ -1047,9 +1175,14 @@ int main(int argc, char * argv[]) {
             .host = host,
             .port = port,
             .cors = true,
+            .agent = NULL,
         };
         neuronos_status_t status = neuronos_server_start(ctx.model, NULL, sparams);
         rc = (status == NEURONOS_OK) ? 0 : 1;
+    }
+    /* ── UI: Browser chat UI with agent ── */
+    else if (command && strcmp(command, "ui") == 0) {
+        rc = cmd_ui_with_model(ctx.model, max_tokens, max_steps, temperature, verbose, mcp_config, host, port);
     }
     /* ── MCP: Model Context Protocol server (STDIO) ── */
     else if (command && strcmp(command, "mcp") == 0) {
@@ -1095,7 +1228,13 @@ int main(int argc, char * argv[]) {
     }
     /* ── DEFAULT: Interactive REPL (zero args or unknown command) ── */
     else if (!command) {
-        rc = cmd_repl_model(ctx.model, max_tokens, max_steps, temperature, grammar_file, verbose, mcp_config);
+        if (isatty(fileno(stdin)) && isatty(fileno(stdout))) {
+            /* Terminal: interactive REPL */
+            rc = cmd_repl_model(ctx.model, max_tokens, max_steps, temperature, grammar_file, verbose, mcp_config);
+        } else {
+            /* No TTY (double-click, desktop launcher, piped): browser chat UI */
+            rc = cmd_ui_with_model(ctx.model, max_tokens, max_steps, temperature, verbose, mcp_config, host, port);
+        }
     } else {
         fprintf(stderr, "Unknown command: %s\n\n", command);
         print_usage(argv[0]);

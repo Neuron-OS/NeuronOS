@@ -1,17 +1,19 @@
 /* ============================================================
- * NeuronOS — Minimal HTTP Server (OpenAI-compatible)
+ * NeuronOS — Minimal HTTP Server (OpenAI-compatible + Agent UI)
  *
  * Endpoints:
- *   POST /v1/chat/completions  — Chat API
+ *   POST /v1/chat/completions  — Chat API (OpenAI-compatible, SSE)
  *   POST /v1/completions       — Text completion
  *   GET  /v1/models            — List models
  *   GET  /health               — Health check
- *   GET  /                     — Status page
+ *   POST /api/chat             — Agent chat (SSE streaming, tool use)
+ *   GET  /                     — Chat UI (agent mode) or status page
  *
  * No external dependencies — pure POSIX sockets.
  * Designed for: desktop apps, browser clients, mobile apps.
  * ============================================================ */
 #include "neuronos/neuronos.h"
+#include "neuronos_chat_ui.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -42,6 +44,7 @@ typedef int socket_t;
 static volatile int g_running = 1;
 static neuronos_model_t * g_model = NULL;
 static neuronos_tool_registry_t * g_tools = NULL;
+static neuronos_agent_t * g_agent = NULL; /* Non-NULL = agent mode with chat UI */
 
 static void signal_handler(int sig) {
     (void)sig;
@@ -689,11 +692,17 @@ static void handle_chat_completions(socket_t sock, const char * body) {
 }
 
 static void handle_root(socket_t sock) {
+    if (g_agent) {
+        /* Agent mode: serve embedded chat UI */
+        send_response(sock, 200, "OK", "text/html; charset=utf-8",
+                      NEURONOS_CHAT_UI_HTML, (int)strlen(NEURONOS_CHAT_UI_HTML));
+        return;
+    }
     const char * html = "<!DOCTYPE html><html><head><title>NeuronOS</title>"
                         "<style>body{font-family:monospace;background:#0a0a0a;color:#0f0;padding:40px}"
                         "h1{color:#0ff}pre{color:#aaa}</style></head><body>"
                         "<h1>NeuronOS v" NEURONOS_VERSION_STRING "</h1>"
-                        "<p>The fastest AI agent engine. Universal. Offline. Any device.</p>"
+                        "<p>AI agent engine. Universal. Offline. Any device.</p>"
                         "<pre>Endpoints:\n"
                         "  POST /v1/chat/completions  - Chat API (OpenAI compatible, SSE streaming)\n"
                         "  POST /v1/completions       - Text completion\n"
@@ -704,12 +713,126 @@ static void handle_root(socket_t sock) {
     send_response(sock, 200, "OK", "text/html", html, (int)strlen(html));
 }
 
+/* ---- Agent SSE Chat Endpoint ---- */
+
+/* Context for agent step callback during SSE streaming */
+typedef struct {
+    socket_t sock;
+    bool ok;
+} agent_sse_ctx_t;
+
+/* Send an SSE event to the client */
+static void sse_send_event(socket_t sock, const char * json_payload) {
+    char buf[16384];
+    int len = snprintf(buf, sizeof(buf), "data: %s\n\n", json_payload);
+    if (len > 0 && len < (int)sizeof(buf)) {
+        send(sock, buf, (size_t)len, 0);
+    }
+}
+
+/* Agent step callback: sends thinking/tool/observation as SSE events */
+static void agent_sse_step_cb(int step, const char * thought, const char * action,
+                               const char * observation, void * user_data) {
+    agent_sse_ctx_t * ctx = (agent_sse_ctx_t *)user_data;
+    if (!ctx || !ctx->ok)
+        return;
+
+    (void)step;
+
+    /* Send thinking event */
+    if (thought && action && strcmp(action, "reply") != 0) {
+        char * esc = json_escape(thought, strlen(thought));
+        if (esc) {
+            char ev[8192];
+            snprintf(ev, sizeof(ev), "{\"type\":\"thinking\",\"text\":\"%s\"}", esc);
+            sse_send_event(ctx->sock, ev);
+            free(esc);
+        }
+    }
+
+    /* Send tool call event */
+    if (action && strcmp(action, "reply") != 0 && strcmp(action, "final_answer") != 0 &&
+        strcmp(action, "error") != 0) {
+
+        if (!observation) {
+            /* First callback for this step: tool invocation */
+            char * esc_act = json_escape(action, strlen(action));
+            if (esc_act) {
+                char ev[4096];
+                snprintf(ev, sizeof(ev), "{\"type\":\"tool\",\"name\":\"%s\"}", esc_act);
+                sse_send_event(ctx->sock, ev);
+                free(esc_act);
+            }
+        } else {
+            /* Second callback: observation result */
+            size_t obs_len = strlen(observation);
+            if (obs_len > 500)
+                obs_len = 500;
+            char * esc_obs = json_escape(observation, obs_len);
+            if (esc_obs) {
+                char ev[8192];
+                snprintf(ev, sizeof(ev), "{\"type\":\"observation\",\"text\":\"%s\"}", esc_obs);
+                sse_send_event(ctx->sock, ev);
+                free(esc_obs);
+            }
+        }
+    }
+}
+
+/* POST /api/chat — Interactive agent with SSE streaming of steps */
+static void handle_agent_chat(socket_t sock, const char * body) {
+    if (!g_agent) {
+        send_json(sock, 503, "{\"error\":{\"message\":\"Agent not available\"}}");
+        return;
+    }
+
+    /* Extract message from body: {"message": "user text"} */
+    char message[8192] = {0};
+    if (json_get_string(body, "message", message, sizeof(message)) != 0) {
+        send_json(sock, 400, "{\"error\":{\"message\":\"Missing 'message' field\"}}");
+        return;
+    }
+
+    /* Send SSE headers */
+    send_sse_headers(sock);
+
+    /* Run agent with SSE step callback */
+    agent_sse_ctx_t ctx = {.sock = sock, .ok = true};
+    neuronos_agent_result_t result = neuronos_agent_chat(g_agent, message, agent_sse_step_cb, &ctx);
+
+    /* Send final response event */
+    if (result.status == NEURONOS_OK && result.text) {
+        char * esc = json_escape(result.text, strlen(result.text));
+        if (esc) {
+            /* Build response event with capacity for escaped text */
+            size_t ev_cap = strlen(esc) + 256;
+            char * ev = malloc(ev_cap);
+            if (ev) {
+                snprintf(ev, ev_cap, "{\"type\":\"response\",\"text\":\"%s\",\"steps\":%d}",
+                         esc, result.steps_taken);
+                sse_send_event(sock, ev);
+                free(ev);
+            }
+            free(esc);
+        }
+    } else {
+        sse_send_event(sock, "{\"type\":\"error\",\"text\":\"Agent failed to generate response\"}");
+    }
+
+    /* Send done marker */
+    const char * done = "data: [DONE]\n\n";
+    send(sock, done, strlen(done), 0);
+
+    neuronos_agent_result_free(&result);
+}
+
 /* ---- Main Server Loop ---- */
 
 neuronos_status_t neuronos_server_start(neuronos_model_t * model, neuronos_tool_registry_t * tools,
                                         neuronos_server_params_t params) {
     g_model = model;
     g_tools = tools;
+    g_agent = params.agent; /* May be NULL (raw inference only) */
 
     if (!params.host)
         params.host = "127.0.0.1";
@@ -757,10 +880,12 @@ neuronos_status_t neuronos_server_start(neuronos_model_t * model, neuronos_tool_
             "\n╔══════════════════════════════════════════╗\n"
             "║  NeuronOS Server v%s                 ║\n"
             "║  http://%s:%-5d                   ║\n"
-            "║  OpenAI-compatible API ready             ║\n"
+            "║  %s║\n"
             "║  Press Ctrl+C to stop                    ║\n"
             "╚══════════════════════════════════════════╝\n\n",
-            NEURONOS_VERSION_STRING, params.host, params.port);
+            NEURONOS_VERSION_STRING, params.host, params.port,
+            g_agent ? "Agent chat UI ready                     "
+                    : "OpenAI-compatible API ready             ");
 
     while (g_running) {
         struct sockaddr_in client_addr;
@@ -795,6 +920,8 @@ neuronos_status_t neuronos_server_start(neuronos_model_t * model, neuronos_tool_
                     handle_completions(client_fd, req.body);
                 } else if (strcmp(req.path, "/v1/chat/completions") == 0 && strcmp(req.method, "POST") == 0) {
                     handle_chat_completions(client_fd, req.body);
+                } else if (strcmp(req.path, "/api/chat") == 0 && strcmp(req.method, "POST") == 0) {
+                    handle_agent_chat(client_fd, req.body);
                 } else if (strcmp(req.path, "/") == 0) {
                     handle_root(client_fd);
                 } else {
