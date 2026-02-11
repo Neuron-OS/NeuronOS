@@ -25,12 +25,44 @@
 #include <string.h>
 
 #ifdef _WIN32
-    #error "MCP Client STDIO transport not yet supported on Windows"
-#else
+/* ============================================================
+ * Windows stub – MCP Client STDIO transport not yet supported.
+ * All public functions return error/0/NULL gracefully.
+ * This lets the project compile on Windows without ifdef noise
+ * in every caller.  When we add Windows named-pipe or TCP
+ * transport, these stubs will be replaced.
+ * ============================================================ */
+#include <stdio.h>
+#include <stdlib.h>
+
+struct neuronos_mcp_client { int dummy; };
+
+neuronos_mcp_client_t * neuronos_mcp_client_create(void) {
+    fprintf(stderr, "[mcp-client] STDIO transport not supported on Windows yet\n");
+    return NULL;
+}
+int neuronos_mcp_client_add_server(neuronos_mcp_client_t * c, const char * n,
+                                   const char * cmd, const char ** a, int na,
+                                   const char ** e, int ne) {
+    (void)c; (void)n; (void)cmd; (void)a; (void)na; (void)e; (void)ne; return -1;
+}
+int neuronos_mcp_client_connect(neuronos_mcp_client_t * c) { (void)c; return -1; }
+int neuronos_mcp_client_tool_count(const neuronos_mcp_client_t * c) { (void)c; return 0; }
+int neuronos_mcp_client_register_tools(neuronos_mcp_client_t * c,
+                                       neuronos_tool_registry_t * r) { (void)c; (void)r; return 0; }
+char * neuronos_mcp_client_call_tool(neuronos_mcp_client_t * c,
+                                     const char * n, const char * a) { (void)c; (void)n; (void)a; return NULL; }
+int neuronos_mcp_client_load_config(neuronos_mcp_client_t * c,
+                                    const char * p) { (void)c; (void)p; return 0; }
+void neuronos_mcp_client_free(neuronos_mcp_client_t * c) { free(c); }
+
+#else /* Unix implementation */
     #include <fcntl.h>
     #include <sys/wait.h>
     #include <unistd.h>
 #endif
+
+#ifndef _WIN32 /* Rest of the file is Unix-only */
 
 /* ============================================================
  * CONSTANTS
@@ -1333,3 +1365,5 @@ void neuronos_mcp_client_free(neuronos_mcp_client_t * client) {
 
     free(client);
 }
+
+#endif /* !_WIN32 */
