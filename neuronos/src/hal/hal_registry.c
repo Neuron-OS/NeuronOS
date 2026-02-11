@@ -11,6 +11,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef __APPLE__
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#endif
+
 /* ──────────────────────────── Internal state ─────────────────────── */
 
 static struct {

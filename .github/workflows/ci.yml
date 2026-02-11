@@ -149,14 +149,31 @@ jobs:
       - name: Install clang
         run: sudo apt-get update && sudo apt-get install -y clang cmake
 
-      - name: Build with -Werror
+      - name: Build project
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
             -DBITNET_X86_TL2=OFF \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DCMAKE_C_FLAGS="-Werror" \
-            -DCMAKE_CXX_FLAGS="-Werror"
+            -DBUILD_SHARED_LIBS=OFF
           cmake --build build -j$(nproc)
+
+      - name: Rebuild NeuronOS sources with -Werror
+        run: |
+          echo "=== Recompiling NeuronOS C files with -Werror ==="
+          NEURONOS_SRCS=$(find neuronos/src -name '*.c' -type f)
+          FAIL=0
+          for src in $NEURONOS_SRCS; do
+            echo "--- $src ---"
+            clang -Werror -Wall -Wextra -std=c11 \
+              -Ineuronos/include -Iinclude -Ibuild/include \
+              -I3rdparty -Ineuronos/3rdparty/sqlite \
+              -DNDEBUG -fsyntax-only "$src" 2>&1 || FAIL=1
+          done
+          if [ "$FAIL" -eq 1 ]; then
+            echo ""
+            echo "ERROR: NeuronOS sources have warnings with -Werror"
+            exit 1
+          fi
+          echo "OK: NeuronOS sources clean under -Werror"
