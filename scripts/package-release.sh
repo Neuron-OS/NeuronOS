@@ -99,6 +99,17 @@ cp "$NEURONOS_CLI" "$STAGING_DIR/bin/"
 strip "$STAGING_DIR/bin/neuronos-cli" 2>/dev/null || true
 ok "Binary: $(du -h "$STAGING_DIR/bin/neuronos-cli" | cut -f1) (stripped)"
 
+# ── Create 'neuronos' wrapper ──
+cat > "$STAGING_DIR/bin/neuronos" << 'WRAPPER_EOF'
+#!/bin/sh
+## NeuronOS — Universal AI Agent Engine
+## Wrapper that delegates to neuronos-cli with auto-configuration.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$SCRIPT_DIR/neuronos-cli" "$@"
+WRAPPER_EOF
+chmod +x "$STAGING_DIR/bin/neuronos"
+ok "Wrapper: neuronos → neuronos-cli"
+
 # ── Copy grammars ──
 GRAMMAR_DIR=""
 for d in "$REPO_ROOT/grammars" "$REPO_ROOT/neuronos/grammars"; do

@@ -249,6 +249,16 @@ target_include_directories(neuronos-cli PRIVATE
 )
 target_link_libraries(neuronos-cli PRIVATE neuronos_agent neuronos_interface neuronos_engine neuronos_hal ${NEURONOS_LIBM})
 
+# Create `neuronos` symlink → neuronos-cli (convenience alias)
+if(NOT WIN32)
+    add_custom_command(TARGET neuronos-cli POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E create_symlink
+            "$<TARGET_FILE_NAME:neuronos-cli>"
+            "$<TARGET_FILE_DIR:neuronos-cli>/neuronos"
+        COMMENT "Creating neuronos → neuronos-cli symlink"
+    )
+endif()
+
 # On Windows, link Winsock and WinHTTP for networking
 if(WIN32)
     target_link_libraries(neuronos-cli PRIVATE ws2_32)

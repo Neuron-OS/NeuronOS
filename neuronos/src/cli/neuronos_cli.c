@@ -98,7 +98,163 @@ static void print_usage(const char * prog) {
             NEURONOS_VERSION_STRING, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog);
 }
 
-/* ---- Load grammar file ---- */
+/* ---- Auto-download model when none found ---- */
+#define MODEL_DOWNLOAD_URL                                                                                             \
+    "https://huggingface.co/microsoft/bitnet-b1.58-2B-4T-gguf/resolve/main/ggml-model-i2_s.gguf"
+#define MODEL_DOWNLOAD_NAME "ggml-model-i2_s.gguf"
+#define MODEL_DOWNLOAD_SIZE_MB 780
+
+static int auto_download_model(bool verbose) {
+    /* Determine model directory: ~/.neuronos/models/ */
+    char models_dir[512] = {0};
+    char model_path[1024] = {0};
+    const char * home = getenv("HOME");
+#ifdef _WIN32
+    if (!home)
+        home = getenv("USERPROFILE");
+#endif
+    if (!home) {
+        fprintf(stderr, "Cannot determine home directory.\n");
+        return -1;
+    }
+
+    snprintf(models_dir, sizeof(models_dir), "%s/.neuronos/models", home);
+    snprintf(model_path, sizeof(model_path), "%s/%s", models_dir, MODEL_DOWNLOAD_NAME);
+
+    /* Check if already exists */
+    FILE * check = fopen(model_path, "r");
+    if (check) {
+        fclose(check);
+        if (verbose)
+            fprintf(stderr, "[model already at %s]\n", model_path);
+        return 0;
+    }
+
+    /* Show download prompt */
+    fprintf(stderr,
+            "\033[36m"
+            "╔══════════════════════════════════════════════╗\n"
+            "║  NeuronOS — First Run Setup                  ║\n"
+            "╠══════════════════════════════════════════════╣\n"
+            "║  No AI model found on this device.           ║\n"
+            "║                                              ║\n"
+            "║  Recommended: BitNet b1.58 2B (~%d MB)      ║\n"
+            "║  • Runs on any CPU, no GPU needed            ║\n"
+            "║  • 1.58-bit ternary — ultra-efficient        ║\n"
+            "║  • Full agent capabilities                   ║\n"
+            "╚══════════════════════════════════════════════╝\n"
+            "\033[0m",
+            MODEL_DOWNLOAD_SIZE_MB);
+
+    /* Auto-download if running interactively, ask first */
+    if (isatty(fileno(stdin))) {
+        fprintf(stderr, "  Download now? [Y/n] ");
+        char answer[16] = {0};
+        if (fgets(answer, sizeof(answer), stdin)) {
+            if (answer[0] == 'n' || answer[0] == 'N') {
+                fprintf(stderr, "\n  Download manually:\n"
+                                "    mkdir -p %s\n"
+                                "    curl -L -o %s \\\n"
+                                "      %s\n\n",
+                        models_dir, model_path, MODEL_DOWNLOAD_URL);
+                return -1;
+            }
+        }
+    }
+
+    /* Create directory */
+    char mkdir_cmd[1024];
+    snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"%s\"", models_dir);
+    if (system(mkdir_cmd) != 0) {
+        fprintf(stderr, "Error: Cannot create directory %s\n", models_dir);
+        return -1;
+    }
+
+    /* Download with curl */
+    fprintf(stderr, "\n  Downloading BitNet b1.58 2B (~%d MB)...\n\n", MODEL_DOWNLOAD_SIZE_MB);
+    char curl_cmd[2048];
+    snprintf(curl_cmd, sizeof(curl_cmd), "curl -fL --progress-bar -o \"%s\" \"%s\"", model_path, MODEL_DOWNLOAD_URL);
+
+    int ret = system(curl_cmd);
+    if (ret != 0) {
+        fprintf(stderr, "\n\033[31mDownload failed.\033[0m Try manually:\n"
+                        "  curl -L -o %s %s\n",
+                model_path, MODEL_DOWNLOAD_URL);
+        /* Clean up partial file */
+        char rm_cmd[1024];
+        snprintf(rm_cmd, sizeof(rm_cmd), "rm -f \"%s\"", model_path);
+        system(rm_cmd);
+        return -1;
+    }
+
+    fprintf(stderr, "\n  \033[32m✓ Model ready: %s\033[0m\n\n", model_path);
+    return 0;
+}
+
+/* ---- First-run welcome prompt ---- */
+static const char * FIRST_RUN_WELCOME_PROMPT =
+    "You just got installed on a new device. Introduce yourself in 3-4 sentences. "
+    "State your name (NeuronOS), that you run 100% locally with zero cloud dependency, "
+    "and list your key powers: persistent memory (SQLite), tool use (filesystem, shell, web), "
+    "agent reasoning (ReAct), MCP protocol, and 1.58-bit ternary efficiency. "
+    "End by inviting the user to chat or give you a task. Be confident and concise.";
+
+static void run_first_run_welcome(neuronos_model_t * model) {
+    const char * home = getenv("HOME");
+#ifdef _WIN32
+    if (!home)
+        home = getenv("USERPROFILE");
+#endif
+    if (!home)
+        return;
+
+    /* Check if first run (marker file) */
+    char marker_path[512];
+    snprintf(marker_path, sizeof(marker_path), "%s/.neuronos/.first_run_done", home);
+    FILE * marker = fopen(marker_path, "r");
+    if (marker) {
+        fclose(marker);
+        return; /* Already ran welcome */
+    }
+
+    fprintf(stderr, "\n\033[36m── Welcome to NeuronOS ──\033[0m\n\n");
+
+    /* Run generation */
+    neuronos_chat_msg_t msgs[2] = {
+        {.role = "system",
+         .content = "You are NeuronOS, a powerful AI agent running locally. "
+                    "Be enthusiastic but professional. Respond in 3-4 sentences."},
+        {.role = "user", .content = FIRST_RUN_WELCOME_PROMPT},
+    };
+
+    char * formatted = NULL;
+    neuronos_status_t fst = neuronos_chat_format(model, NULL, msgs, 2, true, &formatted);
+    const char * effective = (fst == NEURONOS_OK && formatted) ? formatted : FIRST_RUN_WELCOME_PROMPT;
+
+    neuronos_gen_params_t gparams = {
+        .prompt = effective,
+        .max_tokens = 256,
+        .temperature = 0.7f,
+        .top_p = 0.95f,
+        .top_k = 40,
+        .grammar = NULL,
+        .on_token = stream_token,
+        .user_data = NULL,
+        .seed = 0,
+    };
+
+    neuronos_gen_result_t result = neuronos_generate(model, gparams);
+    printf("\n\n");
+    neuronos_free(formatted);
+    neuronos_gen_result_free(&result);
+
+    /* Write marker so we don't repeat */
+    marker = fopen(marker_path, "w");
+    if (marker) {
+        fprintf(marker, "done\n");
+        fclose(marker);
+    }
+}
 static char * load_grammar_file(const char * path) {
     if (!path)
         return NULL;
@@ -919,16 +1075,29 @@ int main(int argc, char * argv[]) {
     neuronos_auto_ctx_t ctx = neuronos_auto_launch(extra_models ? extra_dirs : NULL, verbose);
 
     if (ctx.status != NEURONOS_OK) {
-        fprintf(stderr, "\033[31m"
-                        "Error: Could not auto-configure NeuronOS.\n"
-                        "No suitable .gguf model found.\n\n"
-                        "Place a .gguf model in one of these paths:\n"
-                        "  ./models/\n"
-                        "  ~/.neuronos/models/\n"
-                        "  /usr/share/neuronos/models/\n"
-                        "  or set NEURONOS_MODELS=/path/to/models\n"
-                        "\033[0m");
-        return 1;
+        /* No model found — offer to download one automatically */
+        if (auto_download_model(verbose) == 0) {
+            /* Retry auto-launch after download */
+            ctx = neuronos_auto_launch(extra_models ? extra_dirs : NULL, verbose);
+        }
+
+        if (ctx.status != NEURONOS_OK) {
+            fprintf(stderr, "\033[31m"
+                            "Error: Could not auto-configure NeuronOS.\n"
+                            "No suitable .gguf model found.\n\n"
+                            "Place a .gguf model in one of these paths:\n"
+                            "  ./models/\n"
+                            "  ~/.neuronos/models/\n"
+                            "  /usr/share/neuronos/models/\n"
+                            "  or set NEURONOS_MODELS=/path/to/models\n"
+                            "\033[0m");
+            return 1;
+        }
+    }
+
+    /* First run: show welcome message */
+    if (!command && isatty(fileno(stdin))) {
+        run_first_run_welcome(ctx.model);
     }
 
     int rc = 0;
