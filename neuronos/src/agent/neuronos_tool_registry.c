@@ -11,7 +11,14 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <io.h>
+#define popen _popen
+#define pclose _pclose
+#else
 #include <dirent.h>
+#endif
 
 /* ---- Constants ---- */
 #define NEURONOS_MAX_TOOLS 64
@@ -655,6 +662,38 @@ static neuronos_tool_result_t tool_list_dir(const char * args_json, void * user_
     memcpy(path, path_start, plen);
     path[plen] = '\0';
 
+    /* Build JSON array of entries */
+    char buf[8192];
+    int pos = 0;
+    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "[");
+    int first = 1;
+
+#ifdef _WIN32
+    /* Windows: FindFirstFile/FindNextFile */
+    char search_path[1024];
+    snprintf(search_path, sizeof(search_path), "%s\\*", path);
+    free(path);
+
+    WIN32_FIND_DATAA fdata;
+    HANDLE hFind = FindFirstFileA(search_path, &fdata);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        result.success = false;
+        result.error = strdup("Cannot open directory");
+        return result;
+    }
+    do {
+        if (strcmp(fdata.cFileName, ".") == 0 || strcmp(fdata.cFileName, "..") == 0)
+            continue;
+        if (!first)
+            pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, ",");
+        const char * type = (fdata.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? "dir" : "file";
+        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
+            "{\"name\":\"%s\",\"type\":\"%s\"}", fdata.cFileName, type);
+        first = 0;
+        if (pos >= (int)sizeof(buf) - 100) break;
+    } while (FindNextFileA(hFind, &fdata));
+    FindClose(hFind);
+#else
     DIR * dir = opendir(path);
     free(path);
     if (!dir) {
@@ -663,13 +702,7 @@ static neuronos_tool_result_t tool_list_dir(const char * args_json, void * user_
         return result;
     }
 
-    /* Build JSON array of entries */
-    char buf[8192];
-    int pos = 0;
-    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "[");
-
     struct dirent * entry;
-    int first = 1;
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
@@ -682,6 +715,7 @@ static neuronos_tool_result_t tool_list_dir(const char * args_json, void * user_
             break;
     }
     closedir(dir);
+#endif
     pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "]");
 
     result.success = true;

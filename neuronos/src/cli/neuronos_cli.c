@@ -207,6 +207,9 @@ static int cmd_agent(neuronos_model_t * model, const char * prompt, int max_toke
         /* Try default config path */
         char default_path[512];
         const char * home = getenv("HOME");
+#ifdef _WIN32
+        if (!home) home = getenv("USERPROFILE");
+#endif
         if (home) {
             snprintf(default_path, sizeof(default_path), "%s/.neuronos/mcp.json", home);
             FILE * f = fopen(default_path, "r");
@@ -381,6 +384,9 @@ static int cmd_repl_model(neuronos_model_t * model, int max_tokens, int max_step
         char default_path[512] = {0};
         if (!cfg) {
             const char * home = getenv("HOME");
+#ifdef _WIN32
+            if (!home) home = getenv("USERPROFILE");
+#endif
             if (home) {
                 snprintf(default_path, sizeof(default_path), "%s/.neuronos/mcp.json", home);
                 FILE * f = fopen(default_path, "r");

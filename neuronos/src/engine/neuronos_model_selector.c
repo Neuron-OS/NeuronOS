@@ -20,18 +20,24 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <dirent.h>
 #include <sys/stat.h>
 
 #ifdef __linux__
+    #include <dirent.h>
     #include <sys/sysinfo.h>
     #include <unistd.h>
 #elif defined(__APPLE__)
+    #include <dirent.h>
     #include <sys/sysctl.h>
     #include <unistd.h>
 #elif defined(_WIN32)
     #include <windows.h>
+    #include <direct.h>
+    #include <io.h>
+    #define popen _popen
+    #define pclose _pclose
 #else
+    #include <dirent.h>
     #include <unistd.h>
 #endif
 
@@ -542,6 +548,43 @@ static float score_model(const neuronos_model_entry_t * entry, const neuronos_hw
 /* Recursive directory walker for .gguf files */
 static int scan_dir_recursive(const char * dir_path, const neuronos_hw_info_t * hw, neuronos_model_entry_t * entries,
                               int max_entries, int current_count) {
+#ifdef _WIN32
+    char search_path[1024];
+    snprintf(search_path, sizeof(search_path), "%s\\*", dir_path);
+
+    WIN32_FIND_DATAA fdata;
+    HANDLE hFind = FindFirstFileA(search_path, &fdata);
+    if (hFind == INVALID_HANDLE_VALUE)
+        return current_count;
+
+    do {
+        if (fdata.cFileName[0] == '.')
+            continue;
+
+        char full_path[1024];
+        snprintf(full_path, sizeof(full_path), "%s\\%s", dir_path, fdata.cFileName);
+
+        if (fdata.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            current_count = scan_dir_recursive(full_path, hw, entries, max_entries, current_count);
+        } else if (current_count < max_entries) {
+            size_t name_len = strlen(fdata.cFileName);
+            if (name_len > 5 && strcmp(fdata.cFileName + name_len - 5, ".gguf") == 0) {
+                neuronos_model_entry_t * e = &entries[current_count];
+                snprintf(e->path, sizeof(e->path), "%s", full_path);
+                extract_model_name(full_path, e->name, sizeof(e->name));
+                e->file_size_mb = file_size_mb(full_path);
+                e->est_ram_mb = estimate_ram_needed(e->file_size_mb);
+                e->quant = detect_quant_type(e->name);
+                e->is_ternary = (e->quant == NEURONOS_QUANT_I2_S || e->quant == NEURONOS_QUANT_TL1);
+                e->n_params_est = estimate_params_from_quant(e->file_size_mb, e->quant);
+                e->fits_in_ram = (e->est_ram_mb <= hw->model_budget_mb);
+                e->score = score_model(e, hw);
+                current_count++;
+            }
+        }
+    } while (FindNextFileA(hFind, &fdata) && current_count < max_entries);
+    FindClose(hFind);
+#else
     DIR * dir = opendir(dir_path);
     if (!dir)
         return current_count;
@@ -584,6 +627,7 @@ static int scan_dir_recursive(const char * dir_path, const neuronos_hw_info_t * 
     }
 
     closedir(dir);
+#endif
     return current_count;
 }
 

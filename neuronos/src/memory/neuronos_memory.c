@@ -19,7 +19,15 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+
+#ifdef _WIN32
+#include <direct.h>   /* _mkdir */
+#include <windows.h>
+#define neuronos_mkdir(path) _mkdir(path)
+#else
 #include <unistd.h>
+#define neuronos_mkdir(path) mkdir(path, 0755)
+#endif
 
 /* SQLite amalgamation (compiled with -DSQLITE_CORE -DSQLITE_ENABLE_FTS5) */
 #include "sqlite3.h"
@@ -208,6 +216,9 @@ static char * memory_resolve_path(const char * db_path) {
 
     /* Default: ~/.neuronos/mem.db */
     const char * home = getenv("HOME");
+#ifdef _WIN32
+    if (!home) home = getenv("USERPROFILE");
+#endif
     if (!home) home = "/tmp";
 
     size_t len = strlen(home) + 32;
@@ -215,7 +226,7 @@ static char * memory_resolve_path(const char * db_path) {
     snprintf(path, len, "%s/.neuronos", home);
 
     /* Create directory if needed */
-    mkdir(path, 0755);
+    neuronos_mkdir(path);
 
     snprintf(path, len, "%s/.neuronos/mem.db", home);
     return path;

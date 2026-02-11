@@ -12,6 +12,12 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 /* llama.cpp public C API */
 #include "llama.h"
 
@@ -33,14 +39,30 @@ struct neuronos_model {
 
 /* ---- Helpers ---- */
 static double get_time_ms(void) {
+#ifdef _WIN32
+    LARGE_INTEGER freq, count;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&count);
+    return (double)count.QuadPart * 1000.0 / (double)freq.QuadPart;
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+#endif
 }
 
 static int detect_n_threads(void) {
-    /* Use sysconf if available, fallback to 4 */
-#ifdef _SC_NPROCESSORS_ONLN
+#ifdef _WIN32
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    int nproc = (int)si.dwNumberOfProcessors;
+    if (nproc > 0) {
+        int n = nproc * 3 / 4;
+        if (n < 2) n = 2;
+        if (n > 16) n = 16;
+        return n;
+    }
+#elif defined(_SC_NPROCESSORS_ONLN)
     long nproc = sysconf(_SC_NPROCESSORS_ONLN);
     if (nproc > 0) {
         /* Use most cores: on hybrid CPUs (P+E), using ~75% of
