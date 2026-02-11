@@ -288,7 +288,7 @@ jobs:
           # Create zip
           Compress-Archive -Path "$staging\*" -DestinationPath "$NAME.zip" -Force
           $size = (Get-Item "$NAME.zip").Length / 1MB
-          Write-Host "Packaged: $NAME.zip ({0:N1} MB)" -f $size
+          Write-Host ("Packaged: $NAME.zip ({0:N1} MB)" -f $size)
 
       # ── Upload artifacts ──
       - name: Upload artifact (tarball)
