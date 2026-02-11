@@ -9,7 +9,7 @@
 ##   - Linux x86_64   (Ubuntu 22.04, GCC)
 ##   - Linux ARM64    (Ubuntu 24.04-arm, GCC)
 ##   - macOS ARM64    (macOS 14, Apple Clang)
-##   - Windows x64    (MSVC 2022, Ninja)
+##   - Windows x64    (Clang-CL, Ninja)
 ##   - Android ARM64  (NDK cross-compile)
 ##
 ## All builds use static linking (BUILD_SHARED_LIBS=OFF)
@@ -64,9 +64,11 @@ jobs:
             run_tests: true
             run_hal: false
 
-          # ── Windows x64 (MSVC) ──
+          # ── Windows x64 (Clang-CL + MSVC ABI) ──
           - name: windows-x64
             os: windows-latest
+            cc: clang-cl
+            cxx: clang-cl
             run_tests: true
             run_hal: true
 
@@ -138,11 +140,13 @@ jobs:
             -DBITNET_X86_TL2=OFF \
             -DBUILD_SHARED_LIBS=OFF
 
-      - name: Configure (Windows MSVC)
+      - name: Configure (Windows Clang-CL)
         if: matrix.name == 'windows-x64'
         shell: pwsh
         run: |
           cmake -B build -G "Ninja Multi-Config" `
+            -DCMAKE_C_COMPILER=clang-cl `
+            -DCMAKE_CXX_COMPILER=clang-cl `
             -DBITNET_X86_TL2=OFF `
             -DBUILD_SHARED_LIBS=OFF
 
