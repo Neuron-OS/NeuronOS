@@ -18,8 +18,8 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # ───── Cross-platform helpers ─────
-# libm is built into MSVC CRT, only needed on Unix
-if(NOT MSVC)
+# libm is only needed on Unix (not Windows, even with Clang)
+if(UNIX)
     set(NEURONOS_LIBM m)
 else()
     set(NEURONOS_LIBM "")

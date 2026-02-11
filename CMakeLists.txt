@@ -38,6 +38,13 @@ endif()
 
 find_package(Threads REQUIRED)
 
+# Workaround: llama.cpp's common.cpp uses std::chrono without #include <chrono>.
+# On Linux/macOS it's pulled in transitively; on Windows with Clang it's not.
+# Force-include it for all C++ compilations on Windows.
+if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -include chrono")
+endif()
+
 add_subdirectory(src)
 set(LLAMA_BUILD_SERVER ON CACHE BOOL "Build llama.cpp server" FORCE)
 add_subdirectory(3rdparty/llama.cpp)

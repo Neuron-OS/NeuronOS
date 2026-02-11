@@ -9,7 +9,7 @@
 ##   - Linux x86_64   (Ubuntu 22.04, GCC)
 ##   - Linux ARM64    (Ubuntu 24.04-arm, GCC)
 ##   - macOS ARM64    (macOS 14, Apple Clang)
-##   - Windows x64    (Clang-CL, Ninja)
+##   - Windows x64    (Clang + MSVC SDK, Ninja)
 ##   - Android ARM64  (NDK cross-compile)
 ##
 ## All builds use static linking (BUILD_SHARED_LIBS=OFF)
@@ -64,11 +64,9 @@ jobs:
             run_tests: true
             run_hal: false
 
-          # ── Windows x64 (Clang-CL + MSVC ABI) ──
+          # ── Windows x64 (Clang + MSVC SDK) ──
           - name: windows-x64
             os: windows-latest
-            cc: clang-cl
-            cxx: clang-cl
             run_tests: true
             run_hal: true
 
@@ -105,6 +103,11 @@ jobs:
         with:
           arch: x64
 
+      - name: Install Ninja (Windows)
+        if: matrix.name == 'windows-x64'
+        shell: pwsh
+        run: choco install ninja -y
+
       # ────────────────────────────────────────────
       # Determine version
       # ────────────────────────────────────────────
@@ -140,13 +143,14 @@ jobs:
             -DBITNET_X86_TL2=OFF \
             -DBUILD_SHARED_LIBS=OFF
 
-      - name: Configure (Windows Clang-CL)
+      - name: Configure (Windows)
         if: matrix.name == 'windows-x64'
         shell: pwsh
         run: |
-          cmake -B build -G "Ninja Multi-Config" `
-            -DCMAKE_C_COMPILER=clang-cl `
-            -DCMAKE_CXX_COMPILER=clang-cl `
+          cmake -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=clang `
+            -DCMAKE_CXX_COMPILER=clang++ `
             -DBITNET_X86_TL2=OFF `
             -DBUILD_SHARED_LIBS=OFF
 
