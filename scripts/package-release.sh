@@ -2,9 +2,13 @@
 ##
 ## NeuronOS — Release Packaging Script
 ##
+## Builds a self-contained release tarball for the current platform.
+## The binary is statically linked (BUILD_SHARED_LIBS=OFF), so no .so files
+## are needed — only system libraries (libc, libm, libstdc++, libgomp).
+##
 ## Usage: ./scripts/package-release.sh [version] [build_dir]
-##   version:   e.g. "0.8.0" (default: reads from neuronos.h)
-##   build_dir: path to cmake build dir (default: "build")
+##   version:   e.g. "0.9.0" (default: reads from neuronos.h)
+##   build_dir: path to cmake build dir (default: auto-detect)
 ##
 ## Output: neuronos-v${VERSION}-${OS}-${ARCH}.tar.gz
 ##
@@ -13,31 +17,45 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# ── Colors ──
+RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
+info()  { echo "[info]  $*"; }
+ok()    { echo -e "${GREEN}[ok]${NC}    $*"; }
+die()   { echo -e "${RED}[error]${NC} $*" >&2; exit 1; }
+
 # ── Detect version from header if not provided ──
 if [ -n "${1:-}" ]; then
     VERSION="$1"
 else
     VERSION=$(grep -oP '#define NEURONOS_VERSION\s+"\K[^"]+' \
-        "$REPO_ROOT/neuronos/include/neuronos/neuronos.h" 2>/dev/null || echo "0.8.0")
+        "$REPO_ROOT/neuronos/include/neuronos/neuronos.h" 2>/dev/null || echo "0.0.0")
 fi
 
-BUILD_DIR="${2:-$REPO_ROOT/build}"
+# ── Build dir — find it ──
+if [ -n "${2:-}" ]; then
+    BUILD_DIR="$2"
+elif [ -d "$REPO_ROOT/build" ]; then
+    BUILD_DIR="$REPO_ROOT/build"
+elif [ -d "$REPO_ROOT/../build" ]; then
+    BUILD_DIR="$(cd "$REPO_ROOT/../build" && pwd)"
+else
+    die "Build directory not found. Pass it as second argument."
+fi
 
 # ── Detect platform ──
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 
-# Normalize
 case "$OS" in
     darwin) OS="macos" ;;
     linux)  OS="linux" ;;
-    *)      echo "ERROR: Unsupported OS: $OS"; exit 1 ;;
+    *)      die "Unsupported OS: $OS" ;;
 esac
 
 case "$ARCH" in
     x86_64|amd64)   ARCH="x86_64" ;;
     aarch64|arm64)   ARCH="arm64" ;;
-    *)               echo "ERROR: Unsupported arch: $ARCH"; exit 1 ;;
+    *)               die "Unsupported arch: $ARCH" ;;
 esac
 
 RELEASE_NAME="neuronos-v${VERSION}-${OS}-${ARCH}"
@@ -54,100 +72,90 @@ echo "  Output:   ${OUTPUT_FILE}"
 echo "════════════════════════════════════════════"
 echo ""
 
-# ── Verify build artifacts exist ──
+# ── Verify binary exists ──
 NEURONOS_CLI="$BUILD_DIR/bin/neuronos-cli"
-LIBLLAMA="$BUILD_DIR/3rdparty/llama.cpp/src/libllama.so"
-LIBGGML="$BUILD_DIR/3rdparty/llama.cpp/ggml/src/libggml.so"
-
-if [ "$OS" = "macos" ]; then
-    LIBLLAMA="$BUILD_DIR/3rdparty/llama.cpp/src/libllama.dylib"
-    LIBGGML="$BUILD_DIR/3rdparty/llama.cpp/ggml/src/libggml.dylib"
+if [ ! -f "$NEURONOS_CLI" ]; then
+    die "Binary not found: $NEURONOS_CLI
+    Build first: cmake -B build -S neuronos -DBUILD_SHARED_LIBS=OFF && cmake --build build -j\$(nproc)"
 fi
 
-for f in "$NEURONOS_CLI" "$LIBLLAMA" "$LIBGGML"; do
-    if [ ! -f "$f" ]; then
-        echo "ERROR: Required file not found: $f"
-        echo "       Did you build first? Run: cmake --build $BUILD_DIR -j\$(nproc)"
-        exit 1
+# ── Verify it is statically linked (no libllama.so dependency) ──
+if [ "$OS" = "linux" ] && command -v ldd &>/dev/null; then
+    if ldd "$NEURONOS_CLI" 2>&1 | grep -q "libllama"; then
+        die "Binary is dynamically linked to libllama.so!
+    Rebuild with: cmake -B build -S neuronos -DBUILD_SHARED_LIBS=OFF
+    The release binary MUST be statically linked."
     fi
-done
+    ok "Binary is statically linked (no libllama/libggml deps)"
+fi
 
 # ── Create staging directory ──
 rm -rf "$STAGING_DIR"
-mkdir -p "$STAGING_DIR"/{bin,lib,share/neuronos/grammars}
+mkdir -p "$STAGING_DIR"/{bin,share/neuronos/grammars}
 
-# ── Copy binaries ──
-echo "[1/5] Copying neuronos-cli..."
+# ── Copy binary ──
+info "Copying neuronos-cli..."
 cp "$NEURONOS_CLI" "$STAGING_DIR/bin/"
 strip "$STAGING_DIR/bin/neuronos-cli" 2>/dev/null || true
-
-echo "[2/5] Copying shared libraries..."
-cp "$LIBLLAMA" "$STAGING_DIR/lib/"
-cp "$LIBGGML" "$STAGING_DIR/lib/"
-strip "$STAGING_DIR/lib/"*.so 2>/dev/null || true
-strip "$STAGING_DIR/lib/"*.dylib 2>/dev/null || true
+ok "Binary: $(du -h "$STAGING_DIR/bin/neuronos-cli" | cut -f1) (stripped)"
 
 # ── Copy grammars ──
-echo "[3/5] Copying grammars..."
-if [ -d "$REPO_ROOT/grammars" ]; then
-    cp "$REPO_ROOT/grammars/"*.gbnf "$STAGING_DIR/share/neuronos/grammars/" 2>/dev/null || true
+GRAMMAR_DIR=""
+for d in "$REPO_ROOT/grammars" "$REPO_ROOT/neuronos/grammars"; do
+    if [ -d "$d" ]; then GRAMMAR_DIR="$d"; break; fi
+done
+
+if [ -n "$GRAMMAR_DIR" ]; then
+    info "Copying grammars from $GRAMMAR_DIR..."
+    cp "$GRAMMAR_DIR"/*.gbnf "$STAGING_DIR/share/neuronos/grammars/" 2>/dev/null || true
+    count=$(ls -1 "$STAGING_DIR/share/neuronos/grammars/"*.gbnf 2>/dev/null | wc -l)
+    ok "Grammars: $count files"
+else
+    info "No grammar directory found, skipping"
 fi
 
-# ── Create wrapper script ──
-echo "[4/5] Creating wrapper script..."
-cat > "$STAGING_DIR/bin/neuronos" << 'WRAPPER_EOF'
-#!/usr/bin/env bash
-## NeuronOS launcher — sets library path and runs neuronos-cli
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-NEURONOS_HOME="$(cd "$SCRIPT_DIR/.." && pwd)"
+# ── Create README ──
+cat > "$STAGING_DIR/README.md" << 'README_EOF'
+# NeuronOS
 
-export LD_LIBRARY_PATH="${NEURONOS_HOME}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export DYLD_LIBRARY_PATH="${NEURONOS_HOME}/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-export NEURONOS_GRAMMAR_DIR="${NEURONOS_HOME}/share/neuronos/grammars"
-
-exec "$SCRIPT_DIR/neuronos-cli" "$@"
-WRAPPER_EOF
-chmod +x "$STAGING_DIR/bin/neuronos"
-
-# ── Create README in package ──
-cat > "$STAGING_DIR/README.md" << README_EOF
-# NeuronOS v${VERSION}
-
-Universal AI agent engine for edge devices.
+Universal AI agent engine for edge devices — "The Android of AI"
 
 ## Quick Start
 
-    # Interactive chat with BitNet 2B model
-    ./bin/neuronos <model.gguf> run "Hello"
+    # Run with a BitNet model
+    ./bin/neuronos-cli <model.gguf> run "Hello"
 
-    # Agent mode with tools
-    ./bin/neuronos <model.gguf> agent "List files in /tmp"
+    # Agent mode (with tools)
+    ./bin/neuronos-cli <model.gguf> agent "List files in /tmp"
 
-    # Start HTTP server (OpenAI-compatible)
-    ./bin/neuronos <model.gguf> serve --port 8080
+    # Interactive REPL
+    ./bin/neuronos-cli <model.gguf> chat
 
-    # MCP server mode
-    ./bin/neuronos <model.gguf> mcp
+    # HTTP server (OpenAI-compatible API)
+    ./bin/neuronos-cli <model.gguf> serve --port 8080
 
-## Download a model
+    # MCP server (for Claude Desktop, VS Code, etc.)
+    ./bin/neuronos-cli <model.gguf> mcp
 
-    # BitNet b1.58 2B (recommended, ~400MB)
-    curl -L -o model.gguf \\
+## Download a Model
+
+    # BitNet b1.58 2B — recommended for edge (1.7 GB)
+    curl -L -o model.gguf \
       https://huggingface.co/microsoft/BitNet-b1.58-2B-4T-gguf/resolve/main/ggml-model-i2_s.gguf
 
-## Install system-wide
+## System Requirements
 
-    sudo cp bin/neuronos bin/neuronos-cli /usr/local/bin/
-    sudo cp lib/* /usr/local/lib/
-    sudo ldconfig
+  - Linux x86_64 or ARM64 / macOS ARM64
+  - ~2 GB RAM for BitNet 2B model
+  - No GPU required (CPU-optimized ternary inference)
 
-## More info
+## More Info
 
-    https://github.com/Neuron-OS/neuronos
+  https://github.com/Neuron-OS/neuronos
 README_EOF
 
 # ── Create tarball ──
-echo "[5/5] Creating tarball..."
+info "Creating tarball..."
 cd /tmp
 tar czf "$OUTPUT_FILE" "$RELEASE_NAME"
 rm -rf "$STAGING_DIR"
@@ -155,6 +163,9 @@ rm -rf "$STAGING_DIR"
 SIZE=$(du -h "$OUTPUT_FILE" | cut -f1)
 echo ""
 echo "════════════════════════════════════════════"
-echo "  ✓ Release packaged: ${OUTPUT_FILE}"
+echo -e "  ${GREEN}Done:${NC} ${OUTPUT_FILE}"
 echo "  Size: ${SIZE}"
+echo ""
+echo "  Contents:"
+tar tzf "$OUTPUT_FILE" | sed 's/^/    /'
 echo "════════════════════════════════════════════"
