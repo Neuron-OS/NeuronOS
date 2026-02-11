@@ -41,20 +41,20 @@ neuronos_mcp_client_t * neuronos_mcp_client_create(void) {
     fprintf(stderr, "[mcp-client] STDIO transport not supported on Windows yet\n");
     return NULL;
 }
-int neuronos_mcp_client_add_server(neuronos_mcp_client_t * c, const char * n,
-                                   const char * cmd, const char ** a, int na,
-                                   const char ** e, int ne) {
-    (void)c; (void)n; (void)cmd; (void)a; (void)na; (void)e; (void)ne; return -1;
+int neuronos_mcp_client_add_server(neuronos_mcp_client_t * client,
+                                   const neuronos_mcp_server_config_t * config) {
+    (void)client; (void)config; return -1;
 }
-int neuronos_mcp_client_connect(neuronos_mcp_client_t * c) { (void)c; return -1; }
-int neuronos_mcp_client_tool_count(const neuronos_mcp_client_t * c) { (void)c; return 0; }
-int neuronos_mcp_client_register_tools(neuronos_mcp_client_t * c,
-                                       neuronos_tool_registry_t * r) { (void)c; (void)r; return 0; }
-char * neuronos_mcp_client_call_tool(neuronos_mcp_client_t * c,
-                                     const char * n, const char * a) { (void)c; (void)n; (void)a; return NULL; }
-int neuronos_mcp_client_load_config(neuronos_mcp_client_t * c,
-                                    const char * p) { (void)c; (void)p; return 0; }
-void neuronos_mcp_client_free(neuronos_mcp_client_t * c) { free(c); }
+int neuronos_mcp_client_connect(neuronos_mcp_client_t * client) { (void)client; return -1; }
+int neuronos_mcp_client_tool_count(const neuronos_mcp_client_t * client) { (void)client; return 0; }
+int neuronos_mcp_client_register_tools(neuronos_mcp_client_t * client,
+                                       neuronos_tool_registry_t * registry) { (void)client; (void)registry; return 0; }
+char * neuronos_mcp_client_call_tool(neuronos_mcp_client_t * client,
+                                     const char * tool_name,
+                                     const char * args_json) { (void)client; (void)tool_name; (void)args_json; return NULL; }
+int neuronos_mcp_client_load_config(neuronos_mcp_client_t * client,
+                                    const char * config_path) { (void)client; (void)config_path; return 0; }
+void neuronos_mcp_client_free(neuronos_mcp_client_t * client) { free(client); }
 
 #else /* Unix implementation */
     #include <fcntl.h>
