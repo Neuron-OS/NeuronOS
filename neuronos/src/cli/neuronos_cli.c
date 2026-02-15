@@ -97,6 +97,12 @@ static void print_usage(const char * prog) {
             "  --port <port>    Server port (default: 8384)\n"
             "  --mcp <file>     MCP client config (default: ~/.neuronos/mcp.json)\n"
             "  --verbose        Show debug info\n"
+            "\n"
+            "GPU Options:\n"
+            "  --gpu-layers <n> GPU layers to offload (0=CPU-only, 999=all, default: auto)\n"
+            "  --gpu-info       Show Vulkan GPU info and exit\n"
+            "  --no-gpu         Force CPU-only execution (same as --gpu-layers 0)\n"
+            "\n"
             "  --help           Show this help\n",
             NEURONOS_VERSION_STRING, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog);
 }
@@ -1029,6 +1035,11 @@ int main(int argc, char * argv[]) {
     const char * mcp_config = NULL; /* --mcp <config.json> for MCP client */
 
     (void)n_threads; /* used in legacy mode */
+    /* GPU options */
+    int gpu_layers = -1;      /* -1 = auto, 0 = CPU-only, >0 = manual, 999 = all */
+    bool gpu_info_only = false;
+    bool force_cpu = false;
+
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
@@ -1051,6 +1062,13 @@ int main(int argc, char * argv[]) {
             verbose = true;
         } else if (strcmp(argv[i], "--mcp") == 0 && i + 1 < argc) {
             mcp_config = argv[++i];
+        } else if (strcmp(argv[i], "--gpu-layers") == 0 && i + 1 < argc) {
+            gpu_layers = atoi(argv[++i]);
+            if (gpu_layers < 0) gpu_layers = 0;  /* clamp negative to 0 */
+        } else if (strcmp(argv[i], "--gpu-info") == 0) {
+            gpu_info_only = true;
+        } else if (strcmp(argv[i], "--no-gpu") == 0) {
+            force_cpu = true;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -1067,7 +1085,7 @@ int main(int argc, char * argv[]) {
             if (strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "-s") == 0 ||
                 strcmp(argv[i], "--temp") == 0 || strcmp(argv[i], "--grammar") == 0 ||
                 strcmp(argv[i], "--models") == 0 || strcmp(argv[i], "--host") == 0 || strcmp(argv[i], "--port") == 0 ||
-                strcmp(argv[i], "--mcp") == 0) {
+                strcmp(argv[i], "--mcp") == 0 || strcmp(argv[i], "--gpu-layers") == 0) {
                 i++; /* skip value */
             }
             continue;
@@ -1088,6 +1106,41 @@ int main(int argc, char * argv[]) {
      * ════════════════════════════════════════════════════════ */
     if (command && strcmp(command, "model") == 0) {
         return cmd_model(positional2, positional3, verbose);
+    }
+
+    /* ════════════════════════════════════════════════════════
+     * GPU INFO — Show GPU capabilities and exit
+     * ════════════════════════════════════════════════════════ */
+    if (gpu_info_only) {
+        neuronos_hal_init();
+        neuronos_hw_info_t hw = neuronos_detect_hardware();
+
+        printf("╔══════════════════════════════════════════╗\n");
+        printf("║  NeuronOS GPU Information                ║\n");
+        printf("╠══════════════════════════════════════════╣\n");
+
+        if (hw.gpu_vram_mb > 0) {
+            printf("║  GPU:     %-31s║\n", hw.gpu_name);
+            printf("║  VRAM:    %lld MB                        ║\n", (long long)hw.gpu_vram_mb);
+        } else {
+            printf("║  GPU:     Not detected                   ║\n");
+        }
+
+        #ifdef NEURONOS_HAS_CUDA
+        printf("║  CUDA:    Enabled (compiled)             ║\n");
+        #else
+        printf("║  CUDA:    Disabled (not compiled)        ║\n");
+        #endif
+
+        #ifdef NEURONOS_HAS_VULKAN
+        printf("║  Vulkan:  Enabled (compiled)             ║\n");
+        #else
+        printf("║  Vulkan:  Disabled (not compiled)        ║\n");
+        #endif
+
+        printf("╚══════════════════════════════════════════╝\n");
+        neuronos_hal_shutdown();
+        return 0;
     }
 
     /* ════════════════════════════════════════════════════════
@@ -1172,9 +1225,55 @@ int main(int argc, char * argv[]) {
             }
         }
 
+        /* ── Auto-tune GPU layers ── */
+        int calculated_gpu_layers = 0;
+
+        /* Only auto-tune if user didn't provide manual override */
+        if (gpu_layers < 0 && !force_cpu) {
+            /* Get hardware info and model metadata for auto-tuning */
+            neuronos_hw_info_t hw = neuronos_detect_hardware();
+
+            /* Create minimal model entry for auto-tune */
+            neuronos_model_entry_t model_entry = {0};
+            strncpy(model_entry.path, model_path, sizeof(model_entry.path) - 1);
+            model_entry.file_size_mb = 0;  /* Will be detected by model loader */
+            model_entry.is_ternary = (strstr(model_path, "i2_s") != NULL ||
+                                      strstr(model_path, "ternary") != NULL ||
+                                      strstr(model_path, "bitnet") != NULL);
+
+            /* For better estimation, try to get file size */
+            FILE* f = fopen(model_path, "rb");
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                model_entry.file_size_mb = (int)(ftell(f) / (1024 * 1024));
+                fclose(f);
+            }
+
+            /* Run auto-tune */
+            neuronos_tuned_params_t tuned = neuronos_auto_tune(&hw, &model_entry);
+            calculated_gpu_layers = tuned.n_gpu_layers;
+
+            if (verbose) {
+                fprintf(stderr, "[auto-tune] GPU layers: %d (VRAM: %lld MB, model: %lld MB, ternary: %s)\n",
+                        calculated_gpu_layers, (long long)hw.gpu_vram_mb, (long long)model_entry.file_size_mb,
+                        model_entry.is_ternary ? "yes" : "no");
+            }
+        } else if (force_cpu) {
+            calculated_gpu_layers = 0;
+            if (verbose) {
+                fprintf(stderr, "[GPU] CPU-only mode forced (--no-gpu)\n");
+            }
+        } else {
+            calculated_gpu_layers = gpu_layers;
+            if (verbose) {
+                fprintf(stderr, "[GPU] Manual override: %d layers (--gpu-layers %d)\n",
+                        calculated_gpu_layers, gpu_layers);
+            }
+        }
+
         neuronos_engine_params_t eparams = {
             .n_threads = n_threads,
-            .n_gpu_layers = 0,
+            .n_gpu_layers = calculated_gpu_layers,
             .verbose = verbose,
         };
         neuronos_engine_t * engine = neuronos_init(eparams);
