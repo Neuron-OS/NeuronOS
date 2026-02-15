@@ -96,6 +96,16 @@ neuronos_engine_t * neuronos_init(neuronos_engine_params_t params) {
     /* Initialize NeuronOS HAL */
     neuronos_hal_init();
 
+#ifdef NEURONOS_HAS_VULKAN
+    /* Check if Vulkan GPU is available */
+    extern const void* neuronos_hal_vulkan_get_device(void);
+    const void* vk_dev = neuronos_hal_vulkan_get_device();
+    if (vk_dev && engine->verbose) {
+        /* Vulkan device detected - llama.cpp will use it automatically */
+        fprintf(stderr, "[neuronos] Vulkan GPU detected — llama.cpp backend will use GPU acceleration\n");
+    }
+#endif
+
     engine->initialized = true;
 
     if (engine->verbose) {
@@ -136,6 +146,12 @@ neuronos_model_t * neuronos_model_load(neuronos_engine_t * engine, neuronos_mode
 
     /* --- Load model --- */
     struct llama_model_params mparams = llama_model_default_params();
+    /* GPU layers: if n_gpu_layers > 0, llama.cpp will automatically use:
+     *   - Vulkan backend (if compiled with GGML_VULKAN and Vulkan GPU detected)
+     *   - CUDA backend (if compiled with GGML_CUDA and NVIDIA GPU detected)
+     *   - Metal backend (if on macOS with Apple Silicon)
+     * Vulkan prioritizes universal GPU support (NVIDIA/AMD/Intel).
+     * For ternary models (BitNet 1.58-bit), n_gpu_layers should be 0 (CPU-only MAD kernels). */
     mparams.n_gpu_layers = engine->n_gpu_layers;
     mparams.use_mmap = params.use_mmap;
 
