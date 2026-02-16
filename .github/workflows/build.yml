@@ -89,7 +89,7 @@ jobs:
       # ────────────────────────────────────────────
       - name: Install deps (Linux)
         if: runner.os == 'Linux' && matrix.name != 'android-arm64'
-        run: sudo apt-get update && sudo apt-get install -y cmake libvulkan-dev vulkan-tools glslang-tools
+        run: sudo apt-get update && sudo apt-get install -y cmake libvulkan-dev vulkan-tools glslang-tools glslc
 
       - name: Setup Android NDK
         if: matrix.name == 'android-arm64'
