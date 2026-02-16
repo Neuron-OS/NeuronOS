@@ -93,9 +93,14 @@ jobs:
 
       - name: Setup Android NDK
         if: matrix.name == 'android-arm64'
-        run: |
-          sudo apt-get update && sudo apt-get install -y cmake ninja-build
-          echo "ANDROID_NDK=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
+        uses: android-actions/setup-android@v3
+
+      - name: Install Vulkan SDK (macOS)
+        if: runner.os == 'macOS'
+        uses: humungus/install-vulkan-sdk@v1.1.1
+        with:
+          version: latest
+          cache: true
 
       - name: Setup MSVC (Windows)
         if: matrix.name == 'windows-x64'
@@ -142,7 +147,9 @@ jobs:
             -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DBITNET_X86_TL2=OFF \
             -DBUILD_SHARED_LIBS=OFF \
-            -DNEURONOS_VULKAN=ON
+            -DNEURONOS_VULKAN=ON \
+            -DNEURONOS_CUDA=OFF \
+            -DGGML_CUDA=OFF
 
       - name: Configure (macOS)
         if: runner.os == 'macOS'
@@ -153,7 +160,10 @@ jobs:
             -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DBITNET_X86_TL2=OFF \
             -DBUILD_SHARED_LIBS=OFF \
-            -DNEURONOS_VULKAN=OFF
+            -DNEURONOS_VULKAN=ON \
+            -DGGML_VULKAN=ON \
+            -DNEURONOS_CUDA=OFF \
+            -DGGML_CUDA=OFF
 
       - name: Configure (Windows)
         if: matrix.name == 'windows-x64'
@@ -164,7 +174,9 @@ jobs:
             -DCMAKE_CXX_COMPILER=clang++ `
             -DBITNET_X86_TL2=OFF `
             -DBUILD_SHARED_LIBS=OFF `
-            -DNEURONOS_VULKAN=ON
+            -DNEURONOS_VULKAN=ON \
+            -DNEURONOS_CUDA=OFF \
+            -DGGML_CUDA=OFF
 
       - name: Configure (Android NDK)
         if: matrix.name == 'android-arm64'
@@ -176,9 +188,10 @@ jobs:
             -DANDROID_PLATFORM=android-28 \
             -DBITNET_X86_TL2=OFF \
             -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_OPENMP=OFF \
-            -DNEURONOS_BUILD_TESTS=OFF \
-            -DNEURONOS_VULKAN=OFF
+            -DNEURONOS_VULKAN=OFF \
+            -DGGML_VULKAN=OFF \
+            -DNEURONOS_CUDA=OFF \
+            -DGGML_CUDA=OFF
 
       # ════════════════════════════════════════════
       # Compile
