@@ -214,7 +214,7 @@ cmake --build build -j$(nproc)
 ```
 neuronos/
 ├── include/neuronos/
-│   ├── neuronos.h              # Public API (694 lines, v0.9.0)
+│   ├── neuronos.h              # Public API (694 lines, v0.9.1)
 │   └── neuronos_hal.h          # HAL API (331 lines)
 ├── src/
 │   ├── hal/                    # Hardware abstraction backends

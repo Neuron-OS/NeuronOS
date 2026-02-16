@@ -15,7 +15,7 @@
 set -eu
 
 # ---- Config ----
-GITHUB_REPO="user/neuronos"  # TODO: set real repo
+GITHUB_REPO="Neuron-OS/neuronos"
 DATA_DIR="${HOME}/.neuronos"
 MODELS_DIR="${DATA_DIR}/models"
 

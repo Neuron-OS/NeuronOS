@@ -1,5 +1,5 @@
 /* ============================================================
- * NeuronOS CLI v0.9.0 — Universal AI Agent Interface
+ * NeuronOS CLI v0.9.1 — Universal AI Agent Interface
  *
  * ZERO-CONFIG: Just run `neuronos` → everything works.
  * Auto-detects hardware, finds/downloads model, starts agent,
