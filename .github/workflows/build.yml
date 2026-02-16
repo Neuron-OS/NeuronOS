@@ -98,7 +98,7 @@ jobs:
       - name: Install Vulkan SDK (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install vulkan-headers vulkan-loader molten-vk vulkan-tools
+          brew install vulkan-headers vulkan-loader molten-vk vulkan-tools glslang
           echo "VULKAN_SDK=$(brew --prefix)" >> $GITHUB_ENV
           echo "VK_ICD_FILENAMES=$(brew --prefix)/share/vulkan/icd.d/MoltenVK_icd.json" >> $GITHUB_ENV
           echo "VK_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> $GITHUB_ENV
@@ -173,7 +173,6 @@ jobs:
         run: |
           cmake -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_CXX_COMPILER=clang++ `
             -DBITNET_X86_TL2=OFF `
             -DBUILD_SHARED_LIBS=OFF `
             -DNEURONOS_VULKAN=ON \
