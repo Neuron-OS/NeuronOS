@@ -97,10 +97,12 @@ jobs:
 
       - name: Install Vulkan SDK (macOS)
         if: runner.os == 'macOS'
-        uses: humbletim/install-vulkan-sdk@v1
-        with:
-          version: latest
-          cache: true
+        run: |
+          brew install --cask vulkan-sdk
+          echo "VULKAN_SDK=$HOME/Library/VulkanSDK/$(ls $HOME/Library/VulkanSDK | head -n 1)/macOS" >> $GITHUB_ENV
+          echo "DYLD_LIBRARY_PATH=$HOME/Library/VulkanSDK/$(ls $HOME/Library/VulkanSDK | head -n 1)/macOS/lib" >> $GITHUB_ENV
+          echo "VK_ICD_FILENAMES=$HOME/Library/VulkanSDK/$(ls $HOME/Library/VulkanSDK | head -n 1)/macOS/share/vulkan/icd.d/MoltenVK_icd.json" >> $GITHUB_ENV
+          echo "VK_LAYER_PATH=$HOME/Library/VulkanSDK/$(ls $HOME/Library/VulkanSDK | head -n 1)/macOS/share/vulkan/explicit_layer.d" >> $GITHUB_ENV
 
       - name: Setup MSVC (Windows)
         if: matrix.name == 'windows-x64'
