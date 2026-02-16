@@ -1,0 +1,17 @@
+{
+  "provider": {
+    "neuronos": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://localhost:8080/v1",
+        "name": "neuronos"
+      },
+      "models": {
+        "neuronos-local": {
+          "name": "NeuronOS BitNet 2B (1.58-bit)",
+          "attachment": false
+        }
+      }
+    }
+  }
+}

@@ -1324,7 +1324,13 @@ int main(int argc, char * argv[]) {
             neuronos_tool_registry_t * mcp_tools = neuronos_tool_registry_create();
             neuronos_tool_register_defaults(mcp_tools,
                                             NEURONOS_CAP_FILESYSTEM | NEURONOS_CAP_NETWORK | NEURONOS_CAP_SHELL);
+            /* Register memory tools so MCP clients can use persistent memory */
+            neuronos_memory_t * mcp_mem = neuronos_memory_open(NULL);
+            if (mcp_mem) {
+                neuronos_tool_register_memory(mcp_tools, mcp_mem);
+            }
             neuronos_status_t status = neuronos_mcp_serve_stdio(mcp_tools);
+            if (mcp_mem) neuronos_memory_close(mcp_mem);
             neuronos_tool_registry_free(mcp_tools);
             rc = (status == NEURONOS_OK) ? 0 : 1;
         } else if (strcmp(sub_cmd, "repl") == 0 || strcmp(sub_cmd, "chat") == 0) {
@@ -1408,7 +1414,13 @@ int main(int argc, char * argv[]) {
     else if (command && strcmp(command, "mcp") == 0) {
         neuronos_tool_registry_t * mcp_tools = neuronos_tool_registry_create();
         neuronos_tool_register_defaults(mcp_tools, NEURONOS_CAP_FILESYSTEM | NEURONOS_CAP_NETWORK | NEURONOS_CAP_SHELL);
+        /* Register memory tools so MCP clients can use persistent memory */
+        neuronos_memory_t * mcp_mem = neuronos_memory_open(NULL);
+        if (mcp_mem) {
+            neuronos_tool_register_memory(mcp_tools, mcp_mem);
+        }
         neuronos_status_t status = neuronos_mcp_serve_stdio(mcp_tools);
+        if (mcp_mem) neuronos_memory_close(mcp_mem);
         neuronos_tool_registry_free(mcp_tools);
         rc = (status == NEURONOS_OK) ? 0 : 1;
     }

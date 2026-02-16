@@ -1,0 +1,7 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:8080",
+    "ANTHROPIC_AUTH_TOKEN": "neuronos",
+    "ANTHROPIC_MODEL": "neuronos-local"
+  }
+}
