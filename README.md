@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.9.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.9.1-blue" alt="Version">
   <img src="https://img.shields.io/badge/language-C11-orange" alt="C11">
   <img src="https://img.shields.io/badge/tests-27%2F27-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
@@ -26,7 +26,7 @@ NeuronOS is a self-contained AI agent engine written in pure C11. It runs comple
 Built on [BitNet b1.58](https://github.com/microsoft/BitNet) ternary models, NeuronOS delivers useful AI agents on hardware as modest as 1.5 GB of RAM, entirely offline.
 
 ```
-$ curl -fsSL https://neuronos.dev/install | bash
+$ curl -fsSL https://raw.githubusercontent.com/Neuron-OS/NeuronOS/main/install.sh | sh
 $ neuronos
 > What files are in my project?
 [tool: list_dir] Scanning ./...
@@ -45,7 +45,7 @@ Noted. I'll remember the March 15 deadline.
 **Universal Install** (Linux, macOS, Android, Windows via WSL):
 
 ```bash
-curl -fsSL https://neuronos.dev/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Neuron-OS/NeuronOS/main/install.sh | sh
 ```
 
 This single command will:
