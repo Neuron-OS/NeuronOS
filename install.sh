@@ -331,12 +331,12 @@ else
 
         VERSION="${RELEASE_TAG#v}"
 
-        # Map to release asset name
+        # Map to release asset name (package-release.sh produces neuronos-v{VER}-{os}-{arch})
         case "${OS_TYPE}-${ARCH}" in
-            linux-x86_64)   ASSET="neuronos-linux-x86_64.tar.gz" ;;
-            linux-arm64)    ASSET="neuronos-linux-arm64.tar.gz" ;;
-            macos-arm64)    ASSET="neuronos-macos-arm64.tar.gz" ;;
-            macos-x86_64)   ASSET="neuronos-macos-x86_64.tar.gz" ;;
+            linux-x86_64)   ASSET="neuronos-v${VERSION}-linux-x86_64.tar.gz" ;;
+            linux-arm64)    ASSET="neuronos-v${VERSION}-linux-arm64.tar.gz" ;;
+            macos-arm64)    ASSET="neuronos-v${VERSION}-macos-arm64.tar.gz" ;;
+            macos-x86_64)   ASSET="neuronos-v${VERSION}-macos-x86_64.tar.gz" ;;
             *)
                 warn "No pre-built binary for ${OS_TYPE}-${ARCH}."
                 warn "Building from source instead..."

@@ -286,7 +286,7 @@ jobs:
         if: matrix.name == 'android-arm64'
         run: |
           VER="${{ steps.ver.outputs.version }}"
-          NAME="neuronos-android-arm64"
+          NAME="neuronos-v${VER}-android-arm64"
           mkdir -p /tmp/${NAME}/bin /tmp/${NAME}/share/neuronos/grammars
           BIN=$(find build -name "neuronos-cli" -type f | head -1)
           cp "$BIN" /tmp/${NAME}/bin/
@@ -299,7 +299,7 @@ jobs:
         shell: pwsh
         run: |
           $VER = "${{ steps.ver_win.outputs.version }}"
-          $NAME = "neuronos-windows-x64"
+          $NAME = "neuronos-v${VER}-windows-x64"
           $staging = "$env:RUNNER_TEMP\$NAME"
 
           New-Item -ItemType Directory -Force -Path "$staging\bin" | Out-Null
@@ -410,32 +410,25 @@ jobs:
 
             | Platform | File |
             |----------|------|
-            | Linux x86_64 | `neuronos-linux-x86_64.tar.gz` |
-            | Linux ARM64 | `neuronos-linux-arm64.tar.gz` |
-            | macOS ARM64 | `neuronos-macos-arm64.tar.gz` |
-            | Windows x64 | `neuronos-windows-x64.zip` |
-            | Android ARM64 | `neuronos-android-arm64.tar.gz` |
+            | Linux x86_64 | `neuronos-v${{ steps.ver.outputs.version }}-linux-x86_64.tar.gz` |
+            | Linux ARM64 | `neuronos-v${{ steps.ver.outputs.version }}-linux-arm64.tar.gz` |
+            | macOS ARM64 | `neuronos-v${{ steps.ver.outputs.version }}-macos-arm64.tar.gz` |
+            | Windows x64 | `neuronos-v${{ steps.ver.outputs.version }}-windows-x64.zip` |
+            | Android ARM64 | `neuronos-v${{ steps.ver.outputs.version }}-android-arm64.tar.gz` |
 
             ### Install (Linux / macOS)
 
             ```bash
-            bash <(gh api repos/${{ github.repository }}/contents/scripts/install.sh --jq '.content' | base64 -d)
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh
             ```
 
             ### Quick Start
 
             ```bash
-            # Linux / macOS
-            tar xzf neuronos-*.tar.gz && cd neuronos-*/
-            curl -L -o model.gguf https://huggingface.co/microsoft/BitNet-b1.58-2B-4T-gguf/resolve/main/ggml-model-i2_s.gguf
-            ./bin/neuronos-cli model.gguf chat
-            ```
-
-            ```powershell
-            # Windows
-            Expand-Archive neuronos-*.zip -DestinationPath neuronos
-            cd neuronos
-            .\bin\neuronos-cli.exe model.gguf chat
+            neuronos chat        # Interactive agent
+            neuronos agent "..." # One-shot task
+            neuronos serve       # OpenAI-compatible HTTP API
+            neuronos mcp         # MCP server for Claude/VS Code
             ```
           files: release-files/*
         env:
