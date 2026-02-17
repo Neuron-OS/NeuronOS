@@ -18,6 +18,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+  #define popen  _popen
+  #define pclose _pclose
+#endif
 #include <sys/stat.h>
 
 #include <errno.h>
