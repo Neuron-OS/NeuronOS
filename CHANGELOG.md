@@ -2,6 +2,17 @@
 
 All notable changes to NeuronOS are documented here.
 
+## [0.9.2] - 2026-02-18
+
+### Changed
+- **Default mode**: Running `neuronos` without arguments now launches interactive terminal chat (like Claude Code) instead of web server
+- Improved first-run welcome experience with model auto-detection
+
+### Fixed
+- Windows cp1252 encoding error in embed_webui.py (Unicode arrow replaced)
+- Win32 popen/pclose compatibility in model_registry.c
+- Release asset naming consistency across all platforms
+
 ## [0.9.1] - 2026-02-14
 
 ### Added

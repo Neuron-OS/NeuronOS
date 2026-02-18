@@ -23,8 +23,8 @@ extern "C" {
 /* ---- Version ---- */
 #define NEURONOS_VERSION_MAJOR 0
 #define NEURONOS_VERSION_MINOR 9
-#define NEURONOS_VERSION_PATCH 1
-#define NEURONOS_VERSION_STRING "0.9.1"
+#define NEURONOS_VERSION_PATCH 2
+#define NEURONOS_VERSION_STRING "0.9.2"
 
 /* ---- Opaque types ---- */
 typedef struct neuronos_engine neuronos_engine_t;
