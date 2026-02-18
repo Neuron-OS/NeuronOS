@@ -73,8 +73,8 @@ static void print_usage(const char * prog) {
     fprintf(stderr,
             "NeuronOS v%s — Sovereign AI Agent Engine\n\n"
             "Usage:\n"
-            "  %s                              Start (server + open browser)\n"
-            "  %s chat                          Terminal REPL with agent\n"
+            "  %s                              Interactive agent (terminal chat)\n"
+            "  %s chat                          Same as above (explicit)\n"
             "  %s run \"prompt\"                  One-shot text generation\n"
             "  %s agent \"task\"                  One-shot agent with tools\n"
             "  %s serve [--port 8384]           HTTP server only (no browser)\n"
@@ -1458,9 +1458,16 @@ int main(int argc, char * argv[]) {
             rc = 1;
         }
     }
-    /* ── DEFAULT: Always launch UI (server + browser). Zero friction. ── */
+    /* ── DEFAULT: Interactive terminal chat (like Claude Code). ── */
     else if (!command) {
-        rc = cmd_ui_with_model(ctx.model, max_tokens, max_steps, temperature, verbose, mcp_config, host, port);
+        if (isatty(fileno(stdin))) {
+            run_first_run_welcome(ctx.model);
+            rc = cmd_repl_model(ctx.model, max_tokens, max_steps, temperature, grammar_file, verbose, mcp_config);
+        } else {
+            /* Non-interactive stdin: show help */
+            print_usage(argv[0]);
+            rc = 0;
+        }
     } else {
         fprintf(stderr, "Unknown command: %s\n\n", command);
         print_usage(argv[0]);
