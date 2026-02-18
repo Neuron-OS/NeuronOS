@@ -83,6 +83,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+        continue-on-error: true
+        id: checkout
+
+      - name: Retry checkout (submodule flakiness)
+        if: steps.checkout.outcome == 'failure'
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       # ────────────────────────────────────────────
       # Platform-specific setup
