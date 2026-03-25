@@ -424,7 +424,7 @@ static int cmd_ui_with_model(neuronos_model_t * model, int max_tokens, int max_s
 
     /* Tool registry */
     neuronos_tool_registry_t * tools = neuronos_tool_registry_create();
-    neuronos_tool_register_defaults(tools, NEURONOS_CAP_FILESYSTEM | NEURONOS_CAP_NETWORK | NEURONOS_CAP_SHELL);
+    neuronos_tool_register_defaults(tools, NEURONOS_CAP_FILESYSTEM | NEURONOS_CAP_NETWORK | NEURONOS_CAP_SHELL | NEURONOS_CAP_GIT);
     if (mem) {
         neuronos_tool_register_memory(tools, mem);
     }
@@ -576,7 +576,7 @@ static int cmd_agent(neuronos_model_t * model, const char * prompt, int max_toke
     }
 
     neuronos_tool_registry_t * tools = neuronos_tool_registry_create();
-    neuronos_tool_register_defaults(tools, NEURONOS_CAP_FILESYSTEM | NEURONOS_CAP_NETWORK | NEURONOS_CAP_SHELL);
+    neuronos_tool_register_defaults(tools, NEURONOS_CAP_FILESYSTEM | NEURONOS_CAP_NETWORK | NEURONOS_CAP_SHELL | NEURONOS_CAP_GIT);
 
     /* Register memory tools if memory is available */
     if (mem) {
@@ -722,7 +722,7 @@ static int cmd_repl_model(neuronos_model_t * model, int max_tokens, int max_step
 
     /* Tool registry */
     neuronos_tool_registry_t * tools = neuronos_tool_registry_create();
-    neuronos_tool_register_defaults(tools, NEURONOS_CAP_FILESYSTEM | NEURONOS_CAP_NETWORK | NEURONOS_CAP_SHELL);
+    neuronos_tool_register_defaults(tools, NEURONOS_CAP_FILESYSTEM | NEURONOS_CAP_NETWORK | NEURONOS_CAP_SHELL | NEURONOS_CAP_GIT);
     if (mem) {
         neuronos_tool_register_memory(tools, mem);
     }
@@ -1323,7 +1323,7 @@ int main(int argc, char * argv[]) {
         } else if (strcmp(sub_cmd, "mcp") == 0) {
             neuronos_tool_registry_t * mcp_tools = neuronos_tool_registry_create();
             neuronos_tool_register_defaults(mcp_tools,
-                                            NEURONOS_CAP_FILESYSTEM | NEURONOS_CAP_NETWORK | NEURONOS_CAP_SHELL);
+                                            NEURONOS_CAP_FILESYSTEM | NEURONOS_CAP_NETWORK | NEURONOS_CAP_SHELL | NEURONOS_CAP_GIT);
             /* Register memory tools so MCP clients can use persistent memory */
             neuronos_memory_t * mcp_mem = neuronos_memory_open(NULL);
             if (mcp_mem) {
@@ -1413,7 +1413,7 @@ int main(int argc, char * argv[]) {
     /* ── MCP: Model Context Protocol server (STDIO) ── */
     else if (command && strcmp(command, "mcp") == 0) {
         neuronos_tool_registry_t * mcp_tools = neuronos_tool_registry_create();
-        neuronos_tool_register_defaults(mcp_tools, NEURONOS_CAP_FILESYSTEM | NEURONOS_CAP_NETWORK | NEURONOS_CAP_SHELL);
+        neuronos_tool_register_defaults(mcp_tools, NEURONOS_CAP_FILESYSTEM | NEURONOS_CAP_NETWORK | NEURONOS_CAP_SHELL | NEURONOS_CAP_GIT);
         /* Register memory tools so MCP clients can use persistent memory */
         neuronos_memory_t * mcp_mem = neuronos_memory_open(NULL);
         if (mcp_mem) {

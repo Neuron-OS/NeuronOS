@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
@@ -8,7 +8,7 @@
 <style>
 /* ═══════════════════════════════════════════════════════════
    NeuronOS Chat UI — Premium Vanilla CSS
-   Dark theme · Monospace · Agent-first design
+   Dark/Light theme · Monospace · Agent-first · 3-Panel
    ═══════════════════════════════════════════════════════════ */
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 
@@ -16,6 +16,7 @@
   --bg:        #09090b;
   --surface:   #0f0f13;
   --surface2:  #16161d;
+  --surface3:  #1c1c26;
   --border:    #1e1e2a;
   --border2:   #2a2a3a;
   --text:      #e4e4e7;
@@ -38,7 +39,36 @@
   --font-mono: 'SF Mono','JetBrains Mono','Fira Code','Cascadia Code','Consolas',monospace;
   --font-sans: 'Inter','SF Pro Display',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
   --shadow:    0 1px 3px rgba(0,0,0,0.4);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.5);
   --transition:150ms cubic-bezier(0.4,0,0.2,1);
+  --sidebar-w: 260px;
+  --header-h:  50px;
+}
+
+[data-theme="light"] {
+  --bg:        #ffffff;
+  --surface:   #f8f9fa;
+  --surface2:  #f0f1f3;
+  --surface3:  #e8e9ec;
+  --border:    #e5e7eb;
+  --border2:   #d1d5db;
+  --text:      #1f2937;
+  --text-dim:  #6b7280;
+  --text-muted:#9ca3af;
+  --accent:    #0891b2;
+  --accent-dim:#06b6d4;
+  --accent-bg: rgba(8,145,178,0.08);
+  --user-bg:   #dbeafe;
+  --user-border:#93c5fd;
+  --bot-bg:    #f9fafb;
+  --bot-border:#e5e7eb;
+  --green:     #16a34a;
+  --yellow:    #ca8a04;
+  --red:       #dc2626;
+  --orange:    #ea580c;
+  --purple:    #9333ea;
+  --shadow:    0 1px 3px rgba(0,0,0,0.1);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.15);
 }
 
 html,body {
@@ -51,9 +81,9 @@ body {display:flex;flex-direction:column}
 /* ─── Header ─── */
 .header {
   display:flex;align-items:center;gap:12px;
-  padding:12px 20px;background:var(--surface);
+  padding:0 16px;background:var(--surface);
   border-bottom:1px solid var(--border);flex-shrink:0;
-  z-index:10;
+  z-index:100;height:var(--header-h);
 }
 .header-logo {
   display:flex;align-items:center;gap:8px;
@@ -67,7 +97,7 @@ body {display:flex;flex-direction:column}
   padding:2px 8px;border-radius:4px;
 }
 .header-right {
-  margin-left:auto;display:flex;align-items:center;gap:16px;
+  margin-left:auto;display:flex;align-items:center;gap:12px;
 }
 .header-status {
   display:flex;align-items:center;gap:6px;
@@ -86,13 +116,133 @@ body {display:flex;flex-direction:column}
   border-radius:4px;font-family:var(--font-mono);
 }
 
+.btn-icon {
+  width:34px;height:34px;border-radius:var(--radius-sm);border:none;
+  background:transparent;color:var(--text-dim);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  transition:all var(--transition);
+}
+.btn-icon:hover {background:var(--surface2);color:var(--text)}
+.btn-icon svg {width:18px;height:18px}
+
+/* ─── Layout Shell ─── */
+.shell {
+  flex:1;display:flex;overflow:hidden;
+  height:calc(100% - var(--header-h));
+}
+
+/* ─── Sidebar ─── */
+.sidebar {
+  width:var(--sidebar-w);min-width:var(--sidebar-w);
+  background:var(--surface);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;
+  transition:margin-left 0.25s ease, opacity 0.2s ease;
+  overflow:hidden;z-index:50;
+}
+.sidebar.collapsed {
+  margin-left:calc(var(--sidebar-w) * -1);
+  opacity:0;pointer-events:none;
+}
+
+.sidebar-tabs {
+  display:flex;border-bottom:1px solid var(--border);flex-shrink:0;
+}
+.sidebar-tab {
+  flex:1;padding:10px 0;font-size:12px;font-weight:600;
+  text-align:center;color:var(--text-muted);
+  background:transparent;border:none;cursor:pointer;
+  border-bottom:2px solid transparent;
+  transition:all var(--transition);
+  text-transform:uppercase;letter-spacing:0.04em;
+}
+.sidebar-tab:hover {color:var(--text-dim)}
+.sidebar-tab.active {color:var(--accent);border-bottom-color:var(--accent)}
+
+.sidebar-panel {
+  flex:1;overflow-y:auto;display:none;
+  flex-direction:column;
+}
+.sidebar-panel.active {display:flex}
+
+/* File explorer */
+.file-tree {
+  padding:8px 0;font-family:var(--font-mono);font-size:12px;
+}
+.file-node {
+  display:flex;align-items:center;gap:6px;
+  padding:4px 12px 4px calc(12px + var(--depth, 0) * 16px);
+  cursor:pointer;color:var(--text-dim);
+  transition:all var(--transition);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  user-select:none;
+}
+.file-node:hover {background:var(--surface2);color:var(--text)}
+.file-node .icon {width:16px;text-align:center;flex-shrink:0;font-size:13px}
+.file-node .name {overflow:hidden;text-overflow:ellipsis}
+.file-node.dir .chevron {
+  width:12px;text-align:center;font-size:10px;flex-shrink:0;
+  transition:transform var(--transition);color:var(--text-muted);
+}
+.file-node.dir.open .chevron {transform:rotate(90deg)}
+.file-children {display:none}
+.file-children.open {display:block}
+
+.sidebar-empty {
+  padding:24px 16px;text-align:center;
+  font-size:12px;color:var(--text-muted);
+}
+.sidebar-loading {
+  display:flex;align-items:center;justify-content:center;
+  padding:24px;gap:8px;font-size:12px;color:var(--text-muted);
+}
+.sidebar-loading .spin {
+  width:14px;height:14px;border:2px solid var(--border2);
+  border-top-color:var(--accent);border-radius:50%;
+  animation:spin 0.6s linear infinite;
+}
+
+/* Sessions panel */
+.session-list {
+  padding:8px;display:flex;flex-direction:column;gap:4px;
+}
+.session-item {
+  padding:10px 12px;border-radius:var(--radius-sm);
+  cursor:pointer;border:1px solid transparent;
+  transition:all var(--transition);
+}
+.session-item:hover {background:var(--surface2);border-color:var(--border)}
+.session-item.active {background:var(--accent-bg);border-color:var(--accent-dim)}
+.session-time {
+  font-size:10px;color:var(--text-muted);
+  font-family:var(--font-mono);margin-bottom:4px;
+}
+.session-preview {
+  font-size:12px;color:var(--text-dim);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.btn-new-session {
+  margin:8px;padding:8px 12px;border-radius:var(--radius-sm);
+  border:1px dashed var(--border2);background:transparent;
+  color:var(--text-dim);font-size:12px;cursor:pointer;
+  transition:all var(--transition);display:flex;
+  align-items:center;justify-content:center;gap:6px;
+  font-family:var(--font-sans);
+}
+.btn-new-session:hover {border-color:var(--accent-dim);color:var(--accent);background:var(--accent-bg)}
+
+/* ─── Main Content ─── */
+.main {
+  flex:1;display:flex;flex-direction:column;
+  overflow:hidden;min-width:0;
+}
+
 /* ─── Chat Area ─── */
 .chat {
   flex:1;overflow-y:auto;overflow-x:hidden;
   padding:0;scroll-behavior:smooth;
 }
 .chat-inner {
-  max-width:800px;margin:0 auto;padding:24px 20px 120px;
+  max-width:800px;margin:0 auto;padding:24px 20px 140px;
   display:flex;flex-direction:column;gap:2px;
 }
 
@@ -169,18 +319,18 @@ body {display:flex;flex-direction:column}
   border-radius:var(--radius-sm);padding:14px 16px;
   margin:10px 0;overflow-x:auto;font-size:13px;
   font-family:var(--font-mono);line-height:1.5;
-  color:#d4d4d8;
+  color:var(--text);
 }
 .msg-body code {
   font-family:var(--font-mono);font-size:0.9em;
   background:var(--surface2);padding:2px 6px;
-  border-radius:4px;color:#d4d4d8;
+  border-radius:4px;color:var(--text);
 }
 .msg-body pre code {background:none;padding:0;border-radius:0}
 
 /* Bold, italic, links */
-.msg-body strong {font-weight:600;color:#f4f4f5}
-.msg-body em {font-style:italic;color:#a1a1aa}
+.msg-body strong {font-weight:600}
+.msg-body em {font-style:italic;color:var(--text-dim)}
 .msg-body a {color:var(--accent);text-decoration:none}
 .msg-body a:hover {text-decoration:underline}
 
@@ -188,34 +338,74 @@ body {display:flex;flex-direction:column}
 .msg-body ul,.msg-body ol {padding-left:20px;margin:8px 0}
 .msg-body li {margin:4px 0}
 
-/* ─── Agent Steps ─── */
+/* ─── Agent Steps (enhanced) ─── */
 .steps {
-  margin-top:12px;display:flex;flex-direction:column;gap:6px;
+  margin-top:12px;display:flex;flex-direction:column;gap:4px;
 }
-.step {
-  font-size:12px;font-family:var(--font-mono);
-  padding:8px 12px;border-radius:var(--radius-sm);
-  border-left:3px solid;animation:stepIn 0.2s ease;
+.step-group {
+  border-radius:var(--radius-sm);overflow:hidden;
+  border:1px solid var(--border);
+  animation:stepIn 0.2s ease;
 }
 @keyframes stepIn {
-  from {opacity:0;transform:translateX(-4px)}
+  from {opacity:0;transform:translateY(4px)}
   to   {opacity:1;transform:none}
 }
-.step-think {
-  background:rgba(234,179,8,0.06);border-color:var(--yellow);
-  color:var(--yellow);
+.step-group-header {
+  display:flex;align-items:center;gap:8px;
+  padding:8px 12px;cursor:pointer;
+  font-size:12px;font-family:var(--font-mono);
+  user-select:none;transition:background var(--transition);
 }
-.step-tool {
-  background:rgba(6,182,212,0.06);border-color:var(--accent);
-  color:var(--accent);
+.step-group-header:hover {filter:brightness(1.1)}
+.step-group-header .chevron {
+  font-size:10px;transition:transform var(--transition);
+  color:var(--text-muted);width:12px;
 }
-.step-obs {
-  background:var(--surface2);border-color:var(--border2);
-  color:var(--text-dim);font-size:11px;
-  max-height:120px;overflow-y:auto;white-space:pre-wrap;
+.step-group-header.open .chevron {transform:rotate(90deg)}
+.step-group-header .step-label {flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.step-group-header .step-meta {
+  font-size:10px;color:var(--text-muted);
+  display:flex;gap:8px;flex-shrink:0;
 }
 
-/* ─── Live Status (during streaming) ─── */
+.step-group-body {
+  display:none;padding:8px 12px;
+  border-top:1px solid var(--border);
+  font-size:12px;font-family:var(--font-mono);
+  max-height:300px;overflow-y:auto;
+}
+.step-group-body.open {display:block}
+
+.step-think .step-group-header {
+  background:rgba(234,179,8,0.06);color:var(--yellow);
+}
+.step-think .step-group-body {
+  background:rgba(234,179,8,0.03);color:var(--text-dim);
+  white-space:pre-wrap;word-break:break-word;
+}
+
+.step-tool .step-group-header {
+  background:rgba(6,182,212,0.06);color:var(--accent);
+}
+.step-tool .step-group-body {
+  background:rgba(6,182,212,0.03);color:var(--text-dim);
+}
+.step-tool .step-args {
+  white-space:pre-wrap;word-break:break-word;
+  padding:6px 8px;background:var(--surface2);
+  border-radius:4px;margin-top:4px;font-size:11px;
+}
+
+.step-obs .step-group-header {
+  background:var(--surface2);color:var(--text-dim);
+}
+.step-obs .step-group-body {
+  background:var(--surface);color:var(--text-muted);
+  white-space:pre-wrap;word-break:break-word;font-size:11px;
+}
+
+/* ─── Live Status ─── */
 .live {
   display:none;max-width:800px;margin:0 auto;
   padding:4px 20px 8px;font-size:12px;
@@ -250,9 +440,9 @@ body {display:flex;flex-direction:column}
 
 /* ─── Input Area ─── */
 .input-area {
-  position:fixed;bottom:0;left:0;right:0;
+  position:relative;flex-shrink:0;
   background:linear-gradient(transparent,var(--bg) 20%);
-  padding:16px 20px 20px;z-index:10;
+  padding:16px 20px 20px;
 }
 .input-box {
   max-width:800px;margin:0 auto;position:relative;
@@ -283,17 +473,166 @@ body {display:flex;flex-direction:column}
 .btn-send:disabled {opacity:0.25;cursor:not-allowed;transform:none}
 .btn-send svg {width:18px;height:18px}
 
+/* ─── Modal Overlay (shared) ─── */
+.modal-overlay {
+  position:fixed;inset:0;z-index:500;
+  background:rgba(0,0,0,0.6);
+  display:none;align-items:center;justify-content:center;
+  backdrop-filter:blur(4px);
+  animation:fadeOverlay 0.15s ease;
+}
+.modal-overlay.open {display:flex}
+@keyframes fadeOverlay {from{opacity:0}to{opacity:1}}
+
+.modal {
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);box-shadow:var(--shadow-lg);
+  max-width:560px;width:calc(100% - 32px);
+  max-height:calc(100vh - 64px);
+  display:flex;flex-direction:column;
+  animation:modalIn 0.2s ease;
+}
+@keyframes modalIn {
+  from{opacity:0;transform:translateY(12px) scale(0.97)}
+  to{opacity:1;transform:none}
+}
+.modal-header {
+  display:flex;align-items:center;justify-content:space-between;
+  padding:16px 20px;border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+.modal-title {font-size:15px;font-weight:700;letter-spacing:-0.01em}
+.modal-close {
+  width:28px;height:28px;border:none;border-radius:6px;
+  background:transparent;color:var(--text-muted);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  font-size:16px;transition:all var(--transition);
+}
+.modal-close:hover {background:var(--surface2);color:var(--text)}
+.modal-body {
+  padding:20px;overflow-y:auto;flex:1;
+  display:flex;flex-direction:column;gap:20px;
+}
+
+/* ─── Settings Modal ─── */
+.setting-group {display:flex;flex-direction:column;gap:8px}
+.setting-label {
+  font-size:12px;font-weight:600;color:var(--text-dim);
+  text-transform:uppercase;letter-spacing:0.04em;
+}
+.setting-row {
+  display:flex;align-items:center;gap:12px;
+}
+.setting-row select,
+.setting-row input[type="range"] {
+  flex:1;
+}
+.setting-value {
+  font-size:12px;font-family:var(--font-mono);
+  color:var(--accent);min-width:40px;text-align:right;
+}
+
+select {
+  background:var(--surface2);border:1px solid var(--border);
+  color:var(--text);padding:8px 12px;border-radius:var(--radius-sm);
+  font-size:13px;font-family:var(--font-sans);
+  cursor:pointer;outline:none;
+  transition:border-color var(--transition);
+}
+select:focus {border-color:var(--accent-dim)}
+
+input[type="range"] {
+  -webkit-appearance:none;appearance:none;
+  height:4px;background:var(--border2);border-radius:2px;
+  outline:none;cursor:pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance:none;width:16px;height:16px;
+  border-radius:50%;background:var(--accent);
+  border:2px solid var(--surface);cursor:pointer;
+  box-shadow:0 0 4px rgba(6,182,212,0.3);
+}
+input[type="range"]::-moz-range-thumb {
+  width:16px;height:16px;border-radius:50%;
+  background:var(--accent);border:2px solid var(--surface);
+  cursor:pointer;
+}
+
+.tool-toggles {display:flex;flex-wrap:wrap;gap:8px}
+.tool-toggle {
+  display:flex;align-items:center;gap:6px;
+  padding:6px 12px;border-radius:20px;
+  border:1px solid var(--border);background:var(--surface2);
+  cursor:pointer;font-size:12px;color:var(--text-dim);
+  transition:all var(--transition);user-select:none;
+}
+.tool-toggle:hover {border-color:var(--border2);color:var(--text)}
+.tool-toggle.active {
+  border-color:var(--accent-dim);color:var(--accent);
+  background:var(--accent-bg);
+}
+.tool-toggle input {display:none}
+
+.theme-switch {
+  display:flex;align-items:center;gap:12px;
+}
+.theme-switch-track {
+  width:44px;height:24px;border-radius:12px;
+  background:var(--border2);cursor:pointer;
+  position:relative;transition:background var(--transition);
+  border:1px solid var(--border);
+}
+.theme-switch-track.on {background:var(--accent);border-color:var(--accent)}
+.theme-switch-thumb {
+  width:18px;height:18px;border-radius:50%;
+  background:white;position:absolute;top:2px;left:2px;
+  transition:transform var(--transition);
+  box-shadow:0 1px 2px rgba(0,0,0,0.2);
+}
+.theme-switch-track.on .theme-switch-thumb {transform:translateX(20px)}
+.theme-switch-label {font-size:13px;color:var(--text-dim)}
+
+/* ─── File Viewer Modal ─── */
+.file-viewer-modal .modal {max-width:720px}
+.file-content {
+  font-family:var(--font-mono);font-size:12px;
+  line-height:1.6;white-space:pre;overflow-x:auto;
+  background:var(--surface2);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:0;
+  max-height:60vh;overflow-y:auto;
+}
+.file-line {
+  display:flex;
+}
+.file-line:hover {background:var(--accent-bg)}
+.file-lineno {
+  color:var(--text-muted);text-align:right;
+  padding:0 12px 0 8px;user-select:none;
+  min-width:48px;flex-shrink:0;
+  border-right:1px solid var(--border);
+}
+.file-linetext {
+  padding:0 12px;white-space:pre;flex:1;
+}
+
 /* ─── Scrollbar ─── */
-::-webkit-scrollbar {width:6px}
+::-webkit-scrollbar {width:6px;height:6px}
 ::-webkit-scrollbar-track {background:transparent}
 ::-webkit-scrollbar-thumb {background:var(--border2);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover {background:var(--text-muted)}
 
 /* ─── Responsive ─── */
-@media(max-width:640px) {
-  .chat-inner {padding:16px 12px 120px}
+@media(max-width:768px) {
+  .sidebar {
+    position:fixed;left:0;top:var(--header-h);bottom:0;
+    z-index:90;box-shadow:var(--shadow-lg);
+  }
+  .sidebar.collapsed {
+    margin-left:calc(var(--sidebar-w) * -1);
+  }
+  .chat-inner {padding:16px 12px 140px}
   .input-area {padding:12px 12px 16px}
-  .header {padding:10px 14px}
+  .header {padding:0 12px}
   .welcome {padding:40px 16px 20px}
   .welcome h2 {font-size:20px}
   .welcome-examples {max-width:100%}
@@ -309,12 +648,25 @@ body {display:flex;flex-direction:column}
 
 /* ─── Selection ─── */
 ::selection {background:var(--accent-dim);color:white}
+
+/* ─── Kbd hints ─── */
+.kbd {
+  font-family:var(--font-mono);font-size:10px;
+  padding:2px 5px;border-radius:3px;
+  background:var(--surface2);border:1px solid var(--border);
+  color:var(--text-muted);
+}
 </style>
 </head>
 <body>
 
 <!-- ═══ Header ═══ -->
 <header class="header">
+  <button class="btn-icon" id="btn-sidebar" title="Toggle sidebar (Ctrl+B)" onclick="toggleSidebar()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M3 12h18M3 6h18M3 18h18"/>
+    </svg>
+  </button>
   <div class="header-logo">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="color:var(--accent)">
       <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
@@ -325,68 +677,184 @@ body {display:flex;flex-direction:column}
   <div class="header-right">
     <span class="header-badge" id="model-badge"></span>
     <span class="header-status" id="status">Local</span>
+    <button class="btn-icon" id="btn-settings" title="Settings" onclick="openSettings()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+      </svg>
+    </button>
   </div>
 </header>
 
-<!-- ═══ Chat ═══ -->
-<main class="chat" id="chat">
-  <div class="chat-inner" id="chat-inner">
+<!-- ═══ Layout Shell ═══ -->
+<div class="shell">
 
-    <!-- Welcome -->
-    <div class="welcome" id="welcome">
-      <div class="welcome-icon">⚡</div>
-      <h2>NeuronOS Agent</h2>
-      <p>
-        Sovereign AI running 100% on your device.<br>
-        No cloud. No data leaves your machine. Ever.
-      </p>
-      <div class="welcome-caps">
-        <span class="welcome-cap">🧠 Reasoning</span>
-        <span class="welcome-cap">🛠 Tools</span>
-        <span class="welcome-cap">💾 Memory</span>
-        <span class="welcome-cap">📁 Files</span>
-        <span class="welcome-cap">🌐 Web</span>
-        <span class="welcome-cap">💻 Shell</span>
-        <span class="welcome-cap">🔌 MCP</span>
+  <!-- ═══ Sidebar ═══ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-tabs">
+      <button class="sidebar-tab active" data-tab="files" onclick="switchTab('files')">Files</button>
+      <button class="sidebar-tab" data-tab="sessions" onclick="switchTab('sessions')">Sessions</button>
+    </div>
+
+    <!-- Files Panel -->
+    <div class="sidebar-panel active" id="panel-files">
+      <div class="sidebar-loading" id="files-loading">
+        <div class="spin"></div> Loading...
       </div>
-      <div class="welcome-examples" id="examples">
-        <div class="welcome-example" onclick="useExample(this)">
-          <span>→</span> What files are in the current directory?
+      <div class="file-tree" id="file-tree"></div>
+    </div>
+
+    <!-- Sessions Panel -->
+    <div class="sidebar-panel" id="panel-sessions">
+      <button class="btn-new-session" onclick="newSession()">+ New Session</button>
+      <div class="session-list" id="session-list">
+        <div class="sidebar-empty" id="sessions-empty">No saved sessions</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ═══ Main Content ═══ -->
+  <div class="main">
+    <main class="chat" id="chat">
+      <div class="chat-inner" id="chat-inner">
+        <!-- Welcome -->
+        <div class="welcome" id="welcome">
+          <div class="welcome-icon">&#9889;</div>
+          <h2>NeuronOS Agent</h2>
+          <p>
+            Sovereign AI running 100% on your device.<br>
+            No cloud. No data leaves your machine. Ever.
+          </p>
+          <div class="welcome-caps">
+            <span class="welcome-cap">Reasoning</span>
+            <span class="welcome-cap">Tools</span>
+            <span class="welcome-cap">Memory</span>
+            <span class="welcome-cap">Files</span>
+            <span class="welcome-cap">Web</span>
+            <span class="welcome-cap">Shell</span>
+            <span class="welcome-cap">MCP</span>
+          </div>
+          <div class="welcome-examples" id="examples">
+            <div class="welcome-example" onclick="useExample(this)">
+              <span>&rarr;</span> What files are in the current directory?
+            </div>
+            <div class="welcome-example" onclick="useExample(this)">
+              <span>&rarr;</span> Explain the architecture of this project
+            </div>
+            <div class="welcome-example" onclick="useExample(this)">
+              <span>&rarr;</span> Remember that the deadline is March 15
+            </div>
+            <div class="welcome-example" onclick="useExample(this)">
+              <span>&rarr;</span> Search my memory for previous notes
+            </div>
+          </div>
         </div>
-        <div class="welcome-example" onclick="useExample(this)">
-          <span>→</span> Explain the architecture of this project
-        </div>
-        <div class="welcome-example" onclick="useExample(this)">
-          <span>→</span> Remember that the deadline is March 15
-        </div>
-        <div class="welcome-example" onclick="useExample(this)">
-          <span>→</span> Search my memory for previous notes
+      </div>
+    </main>
+
+    <!-- ═══ Live Step Indicator ═══ -->
+    <div class="live" id="live">
+      <div class="live-icon"></div>
+      <div class="live-text" id="live-text"></div>
+    </div>
+
+    <!-- ═══ Input ═══ -->
+    <div class="input-area">
+      <div class="input-box">
+        <textarea id="input" rows="1" placeholder="Ask anything... (/ to focus)"
+          onkeydown="handleKey(event)"
+          oninput="autoResize(this)"
+        ></textarea>
+        <div class="input-actions">
+          <button class="btn-send" id="btn-send" onclick="sendMessage()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+              <path d="M5 12h14M12 5l7 7-7 7"/>
+            </svg>
+          </button>
         </div>
       </div>
     </div>
-
   </div>
-</main>
-
-<!-- ═══ Live Step Indicator ═══ -->
-<div class="live" id="live">
-  <div class="live-icon"></div>
-  <div class="live-text" id="live-text"></div>
 </div>
 
-<!-- ═══ Input ═══ -->
-<div class="input-area">
-  <div class="input-box">
-    <textarea id="input" rows="1" placeholder="Ask anything..."
-      onkeydown="handleKey(event)"
-      oninput="autoResize(this)"
-    ></textarea>
-    <div class="input-actions">
-      <button class="btn-send" id="btn-send" onclick="sendMessage()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-          <path d="M5 12h14M12 5l7 7-7 7"/>
-        </svg>
-      </button>
+<!-- ═══ Settings Modal ═══ -->
+<div class="modal-overlay" id="settings-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Settings</span>
+      <button class="modal-close" onclick="closeSettings()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <!-- Model -->
+      <div class="setting-group">
+        <div class="setting-label">Model</div>
+        <div class="setting-row">
+          <select id="setting-model">
+            <option value="">Loading...</option>
+          </select>
+        </div>
+      </div>
+      <!-- Temperature -->
+      <div class="setting-group">
+        <div class="setting-label">Temperature</div>
+        <div class="setting-row">
+          <input type="range" id="setting-temp" min="0" max="1.5" step="0.05" value="0.7"
+            oninput="document.getElementById('temp-val').textContent=this.value">
+          <span class="setting-value" id="temp-val">0.7</span>
+        </div>
+      </div>
+      <!-- Max Tokens -->
+      <div class="setting-group">
+        <div class="setting-label">Max Tokens</div>
+        <div class="setting-row">
+          <input type="range" id="setting-tokens" min="64" max="2048" step="64" value="256"
+            oninput="document.getElementById('tokens-val').textContent=this.value">
+          <span class="setting-value" id="tokens-val">256</span>
+        </div>
+      </div>
+      <!-- Max Steps -->
+      <div class="setting-group">
+        <div class="setting-label">Max Steps</div>
+        <div class="setting-row">
+          <input type="range" id="setting-steps" min="1" max="20" step="1" value="10"
+            oninput="document.getElementById('steps-val').textContent=this.value">
+          <span class="setting-value" id="steps-val">10</span>
+        </div>
+      </div>
+      <!-- Tool Toggles -->
+      <div class="setting-group">
+        <div class="setting-label">Tool Capabilities</div>
+        <div class="tool-toggles" id="tool-toggles">
+          <label class="tool-toggle active"><input type="checkbox" checked data-tool="shell"> Shell</label>
+          <label class="tool-toggle active"><input type="checkbox" checked data-tool="filesystem"> Filesystem</label>
+          <label class="tool-toggle active"><input type="checkbox" checked data-tool="network"> Network</label>
+          <label class="tool-toggle active"><input type="checkbox" checked data-tool="memory"> Memory</label>
+          <label class="tool-toggle active"><input type="checkbox" checked data-tool="git"> Git</label>
+        </div>
+      </div>
+      <!-- Theme -->
+      <div class="setting-group">
+        <div class="setting-label">Theme</div>
+        <div class="theme-switch">
+          <div class="theme-switch-track" id="theme-toggle" onclick="toggleTheme()">
+            <div class="theme-switch-thumb"></div>
+          </div>
+          <span class="theme-switch-label" id="theme-label">Dark</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ File Viewer Modal ═══ -->
+<div class="modal-overlay file-viewer-modal" id="file-viewer-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="file-viewer-title">File</span>
+      <button class="modal-close" onclick="closeFileViewer()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="file-content" id="file-viewer-content"></div>
     </div>
   </div>
 </div>
@@ -394,39 +862,392 @@ body {display:flex;flex-direction:column}
 <script>
 /* ═══════════════════════════════════════════════════════════
    NeuronOS Chat UI — Client Logic
-   SSE streaming · Agent steps · Markdown rendering
+   SSE streaming · Agent steps · Markdown · Sidebar · Settings
    ═══════════════════════════════════════════════════════════ */
 
-const chatInner = document.getElementById('chat-inner');
-const chatEl    = document.getElementById('chat');
-const inputEl   = document.getElementById('input');
-const btnSend   = document.getElementById('btn-send');
-const liveEl    = document.getElementById('live');
-const liveText  = document.getElementById('live-text');
-const welcomeEl = document.getElementById('welcome');
-const statusEl  = document.getElementById('status');
+/* ─── DOM References ─── */
+const chatInner  = document.getElementById('chat-inner');
+const chatEl     = document.getElementById('chat');
+const inputEl    = document.getElementById('input');
+const btnSend    = document.getElementById('btn-send');
+const liveEl     = document.getElementById('live');
+const liveText   = document.getElementById('live-text');
+const welcomeEl  = document.getElementById('welcome');
+const statusEl   = document.getElementById('status');
+const sidebarEl  = document.getElementById('sidebar');
+const fileTreeEl = document.getElementById('file-tree');
+const filesLoading = document.getElementById('files-loading');
+const sessionListEl = document.getElementById('session-list');
+const sessionsEmpty = document.getElementById('sessions-empty');
+const settingsModal = document.getElementById('settings-modal');
+const fileViewerModal = document.getElementById('file-viewer-modal');
 
 let busy = false;
+let currentSessionId = null;
 
-/* ─── Init: fetch status ─── */
+/* ─── Settings state ─── */
+const settings = {
+  model: '',
+  temperature: 0.7,
+  maxTokens: 256,
+  maxSteps: 10,
+  tools: { shell: true, filesystem: true, network: true, memory: true, git: true }
+};
+
+/* ─── Init: fetch health ─── */
 fetch('/health').then(r => r.json()).then(d => {
   document.getElementById('ver').textContent = 'v' + (d.version || '?');
   statusEl.classList.remove('offline');
-  if (d.model) document.getElementById('model-badge').textContent = d.model;
+  if (d.model) {
+    document.getElementById('model-badge').textContent = d.model;
+    settings.model = d.model;
+  }
 }).catch(() => {
   statusEl.textContent = 'Offline';
   statusEl.classList.add('offline');
 });
 
-/* ─── Example prompts ─── */
+/* ─── Load models for settings ─── */
+function loadModels() {
+  fetch('/v1/models').then(r => r.json()).then(d => {
+    const sel = document.getElementById('setting-model');
+    sel.innerHTML = '';
+    const models = d.data || d.models || (Array.isArray(d) ? d : []);
+    if (models.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = settings.model || '';
+      opt.textContent = settings.model || 'Default';
+      sel.appendChild(opt);
+    } else {
+      models.forEach(m => {
+        const opt = document.createElement('option');
+        const id = m.id || m.name || m;
+        opt.value = id;
+        opt.textContent = id;
+        if (id === settings.model) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    }
+  }).catch(() => {
+    const sel = document.getElementById('setting-model');
+    sel.innerHTML = '';
+    const opt = document.createElement('option');
+    opt.value = settings.model || '';
+    opt.textContent = settings.model || 'Default';
+    sel.appendChild(opt);
+  });
+}
+
+/* ═══════════════════════════════════════
+   Sidebar: File Explorer
+   ═══════════════════════════════════════ */
+
+function loadFileTree(path, parentEl, depth) {
+  depth = depth || 0;
+  fetch('/api/files?path=' + encodeURIComponent(path))
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(data => {
+      if (parentEl === fileTreeEl) filesLoading.style.display = 'none';
+      const entries = data.entries || data.files || (Array.isArray(data) ? data : []);
+      if (entries.length === 0 && parentEl === fileTreeEl) {
+        fileTreeEl.innerHTML = '<div class="sidebar-empty">No files found</div>';
+        return;
+      }
+      /* Sort: dirs first, then alpha */
+      entries.sort((a, b) => {
+        const aDir = a.type === 'directory' || a.is_dir;
+        const bDir = b.type === 'directory' || b.is_dir;
+        if (aDir && !bDir) return -1;
+        if (!aDir && bDir) return 1;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+      entries.forEach(entry => {
+        const name = entry.name || entry;
+        const isDir = entry.type === 'directory' || entry.is_dir;
+        const fullPath = path === '.' ? name : path + '/' + name;
+        const node = document.createElement('div');
+        node.className = 'file-node' + (isDir ? ' dir' : '');
+        node.style.setProperty('--depth', depth);
+        if (isDir) {
+          node.innerHTML = '<span class="chevron">&#9654;</span><span class="icon">&#128193;</span><span class="name">' + esc(name) + '</span>';
+          const children = document.createElement('div');
+          children.className = 'file-children';
+          let loaded = false;
+          node.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isOpen = node.classList.toggle('open');
+            children.classList.toggle('open', isOpen);
+            if (isOpen && !loaded) {
+              loaded = true;
+              loadFileTree(fullPath, children, depth + 1);
+            }
+          });
+          parentEl.appendChild(node);
+          parentEl.appendChild(children);
+        } else {
+          node.innerHTML = '<span style="width:12px"></span><span class="icon">&#128196;</span><span class="name">' + esc(name) + '</span>';
+          node.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openFileViewer(fullPath);
+          });
+          parentEl.appendChild(node);
+        }
+      });
+    })
+    .catch(() => {
+      if (parentEl === fileTreeEl) {
+        filesLoading.style.display = 'none';
+        fileTreeEl.innerHTML = '<div class="sidebar-empty">Could not load files</div>';
+      }
+    });
+}
+
+/* Initial load */
+loadFileTree('.', fileTreeEl, 0);
+
+/* ═══════════════════════════════════════
+   Sidebar: Sessions
+   ═══════════════════════════════════════ */
+
+function loadSessions() {
+  fetch('/api/sessions')
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(data => {
+      const sessions = data.sessions || (Array.isArray(data) ? data : []);
+      if (sessions.length === 0) {
+        sessionsEmpty.style.display = '';
+        return;
+      }
+      sessionsEmpty.style.display = 'none';
+      /* Clear old items (keep the empty message) */
+      const oldItems = sessionListEl.querySelectorAll('.session-item');
+      oldItems.forEach(el => el.remove());
+      sessions.forEach(s => {
+        const item = document.createElement('div');
+        item.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
+        const ts = s.timestamp || s.created_at || s.date || '';
+        const preview = s.preview || s.first_message || s.title || 'Session';
+        item.innerHTML = '<div class="session-time">' + esc(formatTimestamp(ts)) + '</div>'
+          + '<div class="session-preview">' + esc(preview) + '</div>';
+        item.addEventListener('click', () => loadSession(s.id));
+        sessionListEl.appendChild(item);
+      });
+    })
+    .catch(() => {
+      /* 404 or network error — gracefully do nothing */
+    });
+}
+
+function formatTimestamp(ts) {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts);
+    return d.toLocaleString(undefined, { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+  } catch { return ts; }
+}
+
+function loadSession(id) {
+  currentSessionId = id;
+  fetch('/api/sessions/' + encodeURIComponent(id))
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(data => {
+      chatInner.innerHTML = '';
+      welcomeEl.style.display = 'none';
+      const messages = data.messages || data.history || [];
+      messages.forEach(m => {
+        const role = m.role === 'user' ? 'user' : 'bot';
+        const html = role === 'user' ? esc(m.content || m.text || '') : renderMarkdown(m.content || m.text || '');
+        addMessage(role, html, m.steps || []);
+      });
+      /* Re-add welcome if empty */
+      if (messages.length === 0) {
+        chatInner.appendChild(welcomeEl);
+        welcomeEl.style.display = '';
+      }
+      loadSessions(); /* refresh active marker */
+    })
+    .catch(() => { /* silently fail */ });
+}
+
+function newSession() {
+  currentSessionId = null;
+  chatInner.innerHTML = '';
+  /* Re-create welcome */
+  chatInner.innerHTML = buildWelcomeHTML();
+  /* re-bind */
+  const newWelcome = document.getElementById('welcome');
+  if (newWelcome) newWelcome.style.display = '';
+  loadSessions();
+}
+
+function buildWelcomeHTML() {
+  return '<div class="welcome" id="welcome">'
+    + '<div class="welcome-icon">&#9889;</div>'
+    + '<h2>NeuronOS Agent</h2>'
+    + '<p>Sovereign AI running 100% on your device.<br>No cloud. No data leaves your machine. Ever.</p>'
+    + '<div class="welcome-caps">'
+    + '<span class="welcome-cap">Reasoning</span>'
+    + '<span class="welcome-cap">Tools</span>'
+    + '<span class="welcome-cap">Memory</span>'
+    + '<span class="welcome-cap">Files</span>'
+    + '<span class="welcome-cap">Web</span>'
+    + '<span class="welcome-cap">Shell</span>'
+    + '<span class="welcome-cap">MCP</span>'
+    + '</div>'
+    + '<div class="welcome-examples" id="examples">'
+    + '<div class="welcome-example" onclick="useExample(this)"><span>&rarr;</span> What files are in the current directory?</div>'
+    + '<div class="welcome-example" onclick="useExample(this)"><span>&rarr;</span> Explain the architecture of this project</div>'
+    + '<div class="welcome-example" onclick="useExample(this)"><span>&rarr;</span> Remember that the deadline is March 15</div>'
+    + '<div class="welcome-example" onclick="useExample(this)"><span>&rarr;</span> Search my memory for previous notes</div>'
+    + '</div></div>';
+}
+
+loadSessions();
+
+/* ═══════════════════════════════════════
+   Sidebar Toggle
+   ═══════════════════════════════════════ */
+
+function toggleSidebar() {
+  sidebarEl.classList.toggle('collapsed');
+  localStorage.setItem('neuronos-sidebar', sidebarEl.classList.contains('collapsed') ? '0' : '1');
+}
+
+/* Restore sidebar state */
+(function() {
+  const saved = localStorage.getItem('neuronos-sidebar');
+  if (saved === '0') sidebarEl.classList.add('collapsed');
+  /* On mobile, start collapsed */
+  if (window.innerWidth < 768 && saved !== '1') sidebarEl.classList.add('collapsed');
+})();
+
+function switchTab(tab) {
+  document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + tab));
+}
+
+/* ═══════════════════════════════════════
+   Settings Modal
+   ═══════════════════════════════════════ */
+
+function openSettings() {
+  loadModels();
+  settingsModal.classList.add('open');
+}
+function closeSettings() {
+  settingsModal.classList.remove('open');
+  /* Read values into settings */
+  settings.model = document.getElementById('setting-model').value;
+  settings.temperature = parseFloat(document.getElementById('setting-temp').value);
+  settings.maxTokens = parseInt(document.getElementById('setting-tokens').value, 10);
+  settings.maxSteps = parseInt(document.getElementById('setting-steps').value, 10);
+  document.querySelectorAll('.tool-toggle input').forEach(cb => {
+    settings.tools[cb.dataset.tool] = cb.checked;
+  });
+  /* Attempt to persist settings */
+  fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings)
+  }).catch(() => { /* 404 is fine */ });
+}
+
+/* Tool toggle visual sync */
+document.querySelectorAll('.tool-toggle input').forEach(cb => {
+  cb.addEventListener('change', () => {
+    cb.parentElement.classList.toggle('active', cb.checked);
+  });
+});
+
+/* ═══════════════════════════════════════
+   Theme Toggle
+   ═══════════════════════════════════════ */
+
+function toggleTheme() {
+  const html = document.documentElement;
+  const isDark = html.getAttribute('data-theme') === 'dark';
+  const next = isDark ? 'light' : 'dark';
+  html.setAttribute('data-theme', next);
+  document.getElementById('theme-toggle').classList.toggle('on', next === 'light');
+  document.getElementById('theme-label').textContent = next === 'light' ? 'Light' : 'Dark';
+  localStorage.setItem('neuronos-theme', next);
+}
+
+/* Restore theme */
+(function() {
+  const saved = localStorage.getItem('neuronos-theme');
+  if (saved === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    document.getElementById('theme-toggle').classList.add('on');
+    document.getElementById('theme-label').textContent = 'Light';
+  }
+})();
+
+/* ═══════════════════════════════════════
+   File Viewer
+   ═══════════════════════════════════════ */
+
+function openFileViewer(path) {
+  document.getElementById('file-viewer-title').textContent = path;
+  const contentEl = document.getElementById('file-viewer-content');
+  contentEl.innerHTML = '<div class="sidebar-loading"><div class="spin"></div> Loading...</div>';
+  fileViewerModal.classList.add('open');
+
+  fetch('/api/files?path=' + encodeURIComponent(path) + '&action=read')
+    .then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(data => {
+      const text = data.content || data.text || (typeof data === 'string' ? data : JSON.stringify(data, null, 2));
+      renderFileContent(contentEl, text);
+    })
+    .catch(err => {
+      /* Fallback: try as plain text */
+      fetch('/api/files?path=' + encodeURIComponent(path) + '&action=read')
+        .then(r => r.text())
+        .then(text => {
+          try {
+            const d = JSON.parse(text);
+            renderFileContent(contentEl, d.content || d.text || text);
+          } catch {
+            renderFileContent(contentEl, text);
+          }
+        })
+        .catch(() => {
+          contentEl.innerHTML = '<div class="sidebar-empty">Could not load file: ' + esc(err.message) + '</div>';
+        });
+    });
+}
+
+function renderFileContent(container, text) {
+  const lines = text.split('\n');
+  let html = '';
+  for (let i = 0; i < lines.length; i++) {
+    html += '<div class="file-line"><span class="file-lineno">' + (i + 1) + '</span><span class="file-linetext">' + esc(lines[i]) + '</span></div>';
+  }
+  container.innerHTML = html;
+}
+
+function closeFileViewer() {
+  fileViewerModal.classList.remove('open');
+}
+
+/* ═══════════════════════════════════════
+   Example prompts
+   ═══════════════════════════════════════ */
+
 function useExample(el) {
-  const text = el.textContent.replace(/^→\s*/, '').trim();
+  const text = el.textContent.replace(/^[\u2192\s→]+/, '').trim();
   inputEl.value = text;
   inputEl.focus();
   autoResize(inputEl);
 }
 
-/* ─── Input handling ─── */
+/* ═══════════════════════════════════════
+   Input handling
+   ═══════════════════════════════════════ */
+
 function handleKey(e) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
@@ -441,39 +1262,43 @@ function autoResize(el) {
 
 /* ─── HTML escaping ─── */
 function esc(s) {
+  if (s == null) return '';
   const d = document.createElement('div');
-  d.textContent = s;
+  d.textContent = String(s);
   return d.innerHTML;
 }
 
-/* ─── Simple Markdown → HTML ─── */
+/* ═══════════════════════════════════════
+   Simple Markdown -> HTML
+   ═══════════════════════════════════════ */
+
 function renderMarkdown(text) {
   if (!text) return '';
   let html = esc(text);
 
-  // Code blocks: ```lang\ncode\n```
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
-    '<pre><code>' + code.trim() + '</code></pre>'
-  );
+  /* Code blocks: ```lang\ncode\n``` */
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
+    return '<pre><code>' + code.trim() + '</code></pre>';
+  });
 
-  // Inline code: `code`
+  /* Inline code: `code` */
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
 
-  // Bold: **text**
+  /* Bold: **text** */
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 
-  // Italic: *text*
+  /* Italic: *text* */
   html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
 
-  // Links: [text](url)
+  /* Links: [text](url) */
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 
-  // Line breaks → paragraphs
+  /* Line breaks -> paragraphs */
   html = html.replace(/\n\n+/g, '</p><p>');
   html = html.replace(/\n/g, '<br>');
   html = '<p>' + html + '</p>';
 
-  // Clean up empty paragraphs
+  /* Clean up */
   html = html.replace(/<p>\s*<\/p>/g, '');
   html = html.replace(/<p>\s*(<pre>)/g, '$1');
   html = html.replace(/(<\/pre>)\s*<\/p>/g, '$1');
@@ -481,36 +1306,79 @@ function renderMarkdown(text) {
   return html;
 }
 
-/* ─── Render a step ─── */
-function renderStep(step) {
-  const div = document.createElement('div');
-  div.className = 'step fade-in ';
+/* ═══════════════════════════════════════
+   Enhanced Step Rendering (collapsible)
+   ═══════════════════════════════════════ */
+
+function renderStep(step, index) {
+  const group = document.createElement('div');
+  group.className = 'step-group ';
+
+  const header = document.createElement('div');
+  header.className = 'step-group-header';
+
+  const body = document.createElement('div');
+  body.className = 'step-group-body';
+
+  const chevron = '<span class="chevron">&#9654;</span>';
+  const meta = [];
+  if (step.tokens) meta.push(step.tokens + ' tok');
+  if (step.duration) meta.push(step.duration + 'ms');
+  if (step.time) meta.push(step.time);
+  const metaHTML = meta.length > 0 ? '<span class="step-meta">' + meta.join(' &middot; ') + '</span>' : '';
 
   if (step.type === 'thinking') {
-    div.className += 'step-think';
-    div.textContent = '💭 ' + step.text;
+    group.classList.add('step-think');
+    const preview = (step.text || '').substring(0, 80).replace(/\n/g, ' ');
+    header.innerHTML = chevron + '<span class="step-label">&#128173; ' + esc(preview) + (step.text && step.text.length > 80 ? '...' : '') + '</span>' + metaHTML;
+    body.textContent = step.text || '';
   } else if (step.type === 'tool') {
-    div.className += 'step-tool';
-    div.textContent = '🔧 ' + step.name + (step.args ? ' ' + step.args : '');
+    group.classList.add('step-tool');
+    header.innerHTML = chevron + '<span class="step-label">&#128295; ' + esc(step.name || 'tool') + '</span>' + metaHTML;
+    if (step.args) {
+      const argsText = typeof step.args === 'string' ? step.args : JSON.stringify(step.args, null, 2);
+      body.innerHTML = '<div class="step-args">' + esc(argsText) + '</div>';
+    } else {
+      body.innerHTML = '<span style="color:var(--text-muted)">No arguments</span>';
+    }
   } else if (step.type === 'observation') {
-    div.className += 'step-obs';
-    const txt = step.text || '';
-    div.textContent = txt.length > 500 ? txt.substring(0, 500) + '…' : txt;
+    group.classList.add('step-obs');
+    const obsText = step.text || '';
+    const preview = obsText.substring(0, 60).replace(/\n/g, ' ');
+    header.innerHTML = chevron + '<span class="step-label">&#128203; Result (' + obsText.length + ' chars)</span>' + metaHTML;
+    body.textContent = obsText;
+  } else {
+    /* Unknown step type - render generically */
+    group.classList.add('step-obs');
+    header.innerHTML = chevron + '<span class="step-label">' + esc(step.type || 'step') + '</span>' + metaHTML;
+    body.textContent = step.text || JSON.stringify(step);
   }
 
-  return div;
+  /* Toggle expand/collapse */
+  header.addEventListener('click', () => {
+    header.classList.toggle('open');
+    body.classList.toggle('open');
+  });
+
+  group.appendChild(header);
+  group.appendChild(body);
+  return group;
 }
 
-/* ─── Add a message group to chat ─── */
+/* ═══════════════════════════════════════
+   Add message group to chat
+   ═══════════════════════════════════════ */
+
 function addMessage(role, html, steps) {
-  if (welcomeEl.style.display !== 'none') {
-    welcomeEl.style.display = 'none';
+  const w = document.getElementById('welcome');
+  if (w && w.style.display !== 'none') {
+    w.style.display = 'none';
   }
 
   const group = document.createElement('div');
   group.className = 'msg-group fade-in';
 
-  // Label
+  /* Label */
   const label = document.createElement('div');
   label.className = 'msg-label ' + role;
   if (role === 'user') {
@@ -520,17 +1388,35 @@ function addMessage(role, html, steps) {
   }
   group.appendChild(label);
 
-  // Body
+  /* Body */
   const body = document.createElement('div');
   body.className = 'msg-body';
   body.innerHTML = html;
   group.appendChild(body);
 
-  // Steps
+  /* Steps */
   if (steps && steps.length > 0) {
     const stepsDiv = document.createElement('div');
     stepsDiv.className = 'steps';
-    steps.forEach(s => stepsDiv.appendChild(renderStep(s)));
+
+    /* Collapsible steps header */
+    const stepsHeader = document.createElement('div');
+    stepsHeader.style.cssText = 'font-size:11px;color:var(--text-muted);cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px;user-select:none;margin-bottom:4px;';
+    stepsHeader.innerHTML = '<span class="chevron" style="font-size:10px;transition:transform 0.15s;display:inline-block">&#9654;</span> ' + steps.length + ' step' + (steps.length > 1 ? 's' : '');
+
+    const stepsContainer = document.createElement('div');
+    stepsContainer.style.display = 'none';
+    steps.forEach((s, i) => stepsContainer.appendChild(renderStep(s, i)));
+
+    let stepsOpen = false;
+    stepsHeader.addEventListener('click', () => {
+      stepsOpen = !stepsOpen;
+      stepsContainer.style.display = stepsOpen ? '' : 'none';
+      stepsHeader.querySelector('.chevron').style.transform = stepsOpen ? 'rotate(90deg)' : '';
+    });
+
+    stepsDiv.appendChild(stepsHeader);
+    stepsDiv.appendChild(stepsContainer);
     group.appendChild(stepsDiv);
   }
 
@@ -555,7 +1441,10 @@ function setLive(text) {
   }
 }
 
-/* ─── Send message via SSE ─── */
+/* ═══════════════════════════════════════
+   Send message via SSE
+   ═══════════════════════════════════════ */
+
 async function sendMessage() {
   if (busy) return;
   const text = inputEl.value.trim();
@@ -573,10 +1462,21 @@ async function sendMessage() {
   let response = '';
 
   try {
+    const payload = { message: text };
+    /* Include settings if changed */
+    if (settings.temperature !== 0.7) payload.temperature = settings.temperature;
+    if (settings.maxTokens !== 256) payload.max_tokens = settings.maxTokens;
+    if (settings.maxSteps !== 10) payload.max_steps = settings.maxSteps;
+    if (settings.model) payload.model = settings.model;
+    /* Include enabled tools */
+    const enabledTools = Object.entries(settings.tools).filter(([,v]) => v).map(([k]) => k);
+    if (enabledTools.length < 5) payload.tools = enabledTools;
+    if (currentSessionId) payload.session_id = currentSessionId;
+
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text })
+      body: JSON.stringify(payload)
     });
 
     if (!res.ok) {
@@ -597,31 +1497,33 @@ async function sendMessage() {
 
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
-        const payload = line.slice(6).trim();
-        if (payload === '[DONE]') continue;
+        const payloadStr = line.slice(6).trim();
+        if (payloadStr === '[DONE]') continue;
 
         try {
-          const ev = JSON.parse(payload);
+          const ev = JSON.parse(payloadStr);
 
           if (ev.type === 'thinking') {
             steps.push(ev);
-            setLive('💭 <em>' + esc(ev.text.substring(0, 80)) + '</em>');
+            setLive('&#128173; <em>' + esc(ev.text.substring(0, 80)) + '</em>');
           } else if (ev.type === 'tool') {
             steps.push(ev);
-            setLive('🔧 <em>' + esc(ev.name) + '</em>');
+            setLive('&#128295; <em>' + esc(ev.name) + '</em>');
           } else if (ev.type === 'observation') {
             steps.push(ev);
-            setLive('📋 Processing result...');
+            setLive('&#128203; Processing result...');
           } else if (ev.type === 'response') {
             response = ev.text;
+          } else if (ev.type === 'session') {
+            currentSessionId = ev.id || ev.session_id;
           } else if (ev.type === 'error') {
-            response = '⚠️ ' + (ev.text || 'Agent error');
+            response = '&#9888;&#65039; ' + (ev.text || 'Agent error');
           }
         } catch (e) { /* skip malformed events */ }
       }
     }
   } catch (err) {
-    response = '⚠️ Connection error: ' + err.message;
+    response = '&#9888;&#65039; Connection error: ' + err.message;
   }
 
   setLive(null);
@@ -633,18 +1535,60 @@ async function sendMessage() {
   busy = false;
   btnSend.disabled = false;
   inputEl.focus();
+
+  /* Refresh sessions list after a chat */
+  loadSessions();
 }
+
+/* ═══════════════════════════════════════
+   Keyboard Shortcuts
+   ═══════════════════════════════════════ */
+
+document.addEventListener('keydown', (e) => {
+  const isInputFocused = document.activeElement === inputEl;
+  const isAnyModalOpen = settingsModal.classList.contains('open') || fileViewerModal.classList.contains('open');
+
+  /* Escape: close modals */
+  if (e.key === 'Escape') {
+    if (settingsModal.classList.contains('open')) { closeSettings(); e.preventDefault(); return; }
+    if (fileViewerModal.classList.contains('open')) { closeFileViewer(); e.preventDefault(); return; }
+    return;
+  }
+
+  /* Ctrl+B: toggle sidebar */
+  if (e.key === 'b' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    toggleSidebar();
+    return;
+  }
+
+  /* Ctrl+N: new session */
+  if (e.key === 'n' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    newSession();
+    return;
+  }
+
+  /* Ctrl+/ or / when not typing: focus input */
+  if (e.key === '/' && !isAnyModalOpen) {
+    if (e.ctrlKey || e.metaKey || !isInputFocused) {
+      e.preventDefault();
+      inputEl.focus();
+      return;
+    }
+  }
+});
+
+/* Close modals by clicking overlay */
+settingsModal.addEventListener('click', (e) => {
+  if (e.target === settingsModal) closeSettings();
+});
+fileViewerModal.addEventListener('click', (e) => {
+  if (e.target === fileViewerModal) closeFileViewer();
+});
 
 /* ─── Focus input on load ─── */
 inputEl.focus();
-
-/* ─── Ctrl+/ to show shortcuts (future) ─── */
-document.addEventListener('keydown', (e) => {
-  if (e.key === '/' && !busy && document.activeElement !== inputEl) {
-    e.preventDefault();
-    inputEl.focus();
-  }
-});
 </script>
 </body>
 </html>
