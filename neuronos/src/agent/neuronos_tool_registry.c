@@ -1244,6 +1244,259 @@ static neuronos_tool_result_t tool_read_pdf(const char * args_json, void * user_
     return result;
 }
 
+/* --- git_status tool --- */
+static neuronos_tool_result_t tool_git_status(const char * args_json, void * user_data) {
+    (void)args_json;
+    (void)user_data;
+    neuronos_tool_result_t result = {0};
+
+    /* Get current branch */
+    FILE * fp = popen("git branch --show-current 2>/dev/null", "r");
+    if (!fp) {
+        result.success = false;
+        result.error = strdup("Failed to run git");
+        return result;
+    }
+    char branch[256] = "(unknown)";
+    if (fgets(branch, (int)sizeof(branch), fp)) {
+        size_t len = strlen(branch);
+        while (len > 0 && (branch[len - 1] == '\n' || branch[len - 1] == '\r'))
+            branch[--len] = '\0';
+    }
+    pclose(fp);
+
+    /* Get porcelain status */
+    fp = popen("git status --porcelain 2>/dev/null", "r");
+    if (!fp) {
+        result.success = false;
+        result.error = strdup("Failed to run git status");
+        return result;
+    }
+
+    size_t out_cap = 4096;
+    size_t out_len = 0;
+    char * out = malloc(out_cap);
+    if (!out) { pclose(fp); result.success = false; result.error = strdup("error: out of memory"); return result; }
+
+    out_len += (size_t)snprintf(out, out_cap, "Branch: %s\n", branch);
+
+    char line[512];
+    while (fgets(line, (int)sizeof(line), fp)) {
+        size_t llen = strlen(line);
+        while (out_len + llen + 1 > out_cap) {
+            out_cap *= 2;
+            void * tmp = realloc(out, out_cap);
+            if (!tmp) { free(out); pclose(fp); result.success = false; result.error = strdup("error: out of memory"); return result; }
+            out = tmp;
+        }
+        memcpy(out + out_len, line, llen);
+        out_len += llen;
+    }
+    out[out_len] = '\0';
+    pclose(fp);
+
+    result.success = true;
+    result.output = out;
+    return result;
+}
+
+/* --- git_diff tool --- */
+static neuronos_tool_result_t tool_git_diff(const char * args_json, void * user_data) {
+    (void)user_data;
+    neuronos_tool_result_t result = {0};
+
+    int staged = nj_find_bool(args_json, "staged", 0);
+    const char * cmd = staged ? "git diff --staged 2>/dev/null" : "git diff 2>/dev/null";
+
+    FILE * fp = popen(cmd, "r");
+    if (!fp) {
+        result.success = false;
+        result.error = strdup("Failed to run git diff");
+        return result;
+    }
+
+    static const size_t MAX_DIFF = 32 * 1024;
+    size_t out_cap = 8192;
+    size_t out_len = 0;
+    char * out = malloc(out_cap);
+    if (!out) { pclose(fp); result.success = false; result.error = strdup("error: out of memory"); return result; }
+
+    char chunk[4096];
+    while (fgets(chunk, (int)sizeof(chunk), fp)) {
+        size_t clen = strlen(chunk);
+        while (out_len + clen + 64 > out_cap) {
+            out_cap *= 2;
+            if (out_cap > MAX_DIFF + 256) out_cap = MAX_DIFF + 256;
+            void * tmp = realloc(out, out_cap);
+            if (!tmp) { free(out); pclose(fp); result.success = false; result.error = strdup("error: out of memory"); return result; }
+            out = tmp;
+        }
+        if (out_len + clen >= MAX_DIFF) {
+            size_t remain = MAX_DIFF - out_len;
+            if (remain > 0) { memcpy(out + out_len, chunk, remain); out_len += remain; }
+            out_len += (size_t)snprintf(out + out_len, 64, "\n... [truncated at 32KB]");
+            break;
+        }
+        memcpy(out + out_len, chunk, clen);
+        out_len += clen;
+    }
+    out[out_len] = '\0';
+    pclose(fp);
+
+    if (out_len == 0) {
+        free(out);
+        result.success = true;
+        result.output = strdup("(no diff)");
+    } else {
+        result.success = true;
+        result.output = out;
+    }
+    return result;
+}
+
+/* --- patch_file tool --- */
+static neuronos_tool_result_t tool_patch_file(const char * args_json, void * user_data) {
+    (void)user_data;
+    neuronos_tool_result_t result = {0};
+
+    char * path = nj_alloc_str(args_json, "path");
+    if (!path) {
+        result.success = false;
+        result.error = strdup("Missing or invalid 'path' argument");
+        return result;
+    }
+
+    int old_len = 0, new_len = 0;
+    const char * old_text = nj_find_str(args_json, "old_text", &old_len);
+    const char * new_text = nj_find_str(args_json, "new_text", &new_len);
+    if (!old_text || old_len == 0) {
+        free(path);
+        result.success = false;
+        result.error = strdup("Missing or empty 'old_text' argument");
+        return result;
+    }
+    if (!new_text) { new_text = ""; new_len = 0; }
+
+    /* Read existing file */
+    FILE * fp = fopen(path, "rb");
+    if (!fp) {
+        char err[512];
+        snprintf(err, sizeof(err), "File not found: %s", path);
+        free(path);
+        result.success = false;
+        result.error = strdup(err);
+        return result;
+    }
+    fseek(fp, 0, SEEK_END);
+    long fsize = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    char * content = malloc((size_t)fsize + 1);
+    if (!content) { fclose(fp); free(path); result.success = false; result.error = strdup("error: out of memory"); return result; }
+    size_t nread = fread(content, 1, (size_t)fsize, fp);
+    content[nread] = '\0';
+    fclose(fp);
+
+    /* Find first occurrence of old_text */
+    char * match = NULL;
+    for (size_t i = 0; i + (size_t)old_len <= nread; i++) {
+        if (memcmp(content + i, old_text, (size_t)old_len) == 0) {
+            match = content + i;
+            break;
+        }
+    }
+    if (!match) {
+        free(content); free(path);
+        result.success = false;
+        result.error = strdup("old_text not found in file");
+        return result;
+    }
+
+    /* Build new content */
+    size_t prefix_len = (size_t)(match - content);
+    size_t suffix_len = nread - prefix_len - (size_t)old_len;
+    size_t new_size = prefix_len + (size_t)new_len + suffix_len;
+    char * new_content = malloc(new_size + 1);
+    if (!new_content) { free(content); free(path); result.success = false; result.error = strdup("error: out of memory"); return result; }
+
+    memcpy(new_content, content, prefix_len);
+    memcpy(new_content + prefix_len, new_text, (size_t)new_len);
+    memcpy(new_content + prefix_len + (size_t)new_len, match + old_len, suffix_len);
+    new_content[new_size] = '\0';
+    free(content);
+
+    /* Write back */
+    fp = fopen(path, "wb");
+    if (!fp) { free(new_content); free(path); result.success = false; result.error = strdup("Cannot write file"); return result; }
+    fwrite(new_content, 1, new_size, fp);
+    fclose(fp);
+    free(new_content);
+
+    char msg[512];
+    snprintf(msg, sizeof(msg), "Patched %s: replaced %d bytes with %d bytes", path, old_len, new_len);
+    free(path);
+    result.success = true;
+    result.output = strdup(msg);
+    return result;
+}
+
+/* --- git_commit tool --- */
+static neuronos_tool_result_t tool_git_commit(const char * args_json, void * user_data) {
+    (void)user_data;
+    neuronos_tool_result_t result = {0};
+
+    int msg_len = 0;
+    const char * msg = nj_find_str(args_json, "message", &msg_len);
+    if (!msg || msg_len == 0) {
+        result.success = false;
+        result.error = strdup("Missing or empty 'message' argument");
+        return result;
+    }
+
+    if (!is_safe_for_shell_embed(msg, (size_t)msg_len)) {
+        result.success = false;
+        result.error = strdup("Commit message contains disallowed characters");
+        return result;
+    }
+
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd), "git add -A && git commit -m '%.*s' 2>&1", msg_len, msg);
+
+    FILE * fp = popen(cmd, "r");
+    if (!fp) {
+        result.success = false;
+        result.error = strdup("Failed to run git commit");
+        return result;
+    }
+
+    size_t out_cap = 4096;
+    size_t out_len = 0;
+    char * out = malloc(out_cap);
+    if (!out) { pclose(fp); result.success = false; result.error = strdup("error: out of memory"); return result; }
+
+    char line[512];
+    while (fgets(line, (int)sizeof(line), fp)) {
+        size_t llen = strlen(line);
+        while (out_len + llen + 1 > out_cap) {
+            out_cap *= 2;
+            void * tmp = realloc(out, out_cap);
+            if (!tmp) { free(out); pclose(fp); result.success = false; result.error = strdup("error: out of memory"); return result; }
+            out = tmp;
+        }
+        memcpy(out + out_len, line, llen);
+        out_len += llen;
+    }
+    out[out_len] = '\0';
+
+    int status = pclose(fp);
+    result.success = (status == 0);
+    result.output = out;
+    if (!result.success) {
+        result.error = strdup("git commit failed (see output for details)");
+    }
+    return result;
+}
+
 int neuronos_tool_register_defaults(neuronos_tool_registry_t * reg, uint32_t allowed_caps) {
     if (!reg)
         return -1;
@@ -1373,6 +1626,59 @@ int neuronos_tool_register_defaults(neuronos_tool_registry_t * reg, uint32_t all
             .required_caps = 0,
         };
         if (neuronos_tool_register(reg, &desc_time) == 0)
+            registered++;
+    }
+
+    if (allowed_caps & NEURONOS_CAP_GIT) {
+        neuronos_tool_desc_t desc_gs = {
+            .name = "git_status",
+            .description = "Show current git branch and file status (porcelain format).",
+            .args_schema_json = "{\"type\":\"object\",\"properties\":{}}",
+            .execute = tool_git_status,
+            .user_data = NULL,
+            .required_caps = NEURONOS_CAP_GIT,
+        };
+        if (neuronos_tool_register(reg, &desc_gs) == 0)
+            registered++;
+
+        neuronos_tool_desc_t desc_gd = {
+            .name = "git_diff",
+            .description = "Show git diff. Set staged=true for staged changes, otherwise shows unstaged.",
+            .args_schema_json = "{\"type\":\"object\",\"properties\":{\"staged\":{\"type\":\"boolean\","
+                                "\"description\":\"If true, show staged changes (--staged)\"}}}",
+            .execute = tool_git_diff,
+            .user_data = NULL,
+            .required_caps = NEURONOS_CAP_GIT,
+        };
+        if (neuronos_tool_register(reg, &desc_gd) == 0)
+            registered++;
+
+        neuronos_tool_desc_t desc_pf = {
+            .name = "patch_file",
+            .description = "Search/replace editor: replace first occurrence of old_text with new_text in a file.",
+            .args_schema_json =
+                "{\"type\":\"object\",\"properties\":{"
+                "\"path\":{\"type\":\"string\",\"description\":\"File path to patch\"},"
+                "\"old_text\":{\"type\":\"string\",\"description\":\"Text to find (exact match)\"},"
+                "\"new_text\":{\"type\":\"string\",\"description\":\"Replacement text\"}"
+                "},\"required\":[\"path\",\"old_text\",\"new_text\"]}",
+            .execute = tool_patch_file,
+            .user_data = NULL,
+            .required_caps = NEURONOS_CAP_GIT,
+        };
+        if (neuronos_tool_register(reg, &desc_pf) == 0)
+            registered++;
+
+        neuronos_tool_desc_t desc_gc = {
+            .name = "git_commit",
+            .description = "Stage all changes and commit with the given message.",
+            .args_schema_json = "{\"type\":\"object\",\"properties\":{\"message\":{\"type\":\"string\","
+                                "\"description\":\"Commit message\"}},\"required\":[\"message\"]}",
+            .execute = tool_git_commit,
+            .user_data = NULL,
+            .required_caps = NEURONOS_CAP_GIT,
+        };
+        if (neuronos_tool_register(reg, &desc_gc) == 0)
             registered++;
     }
 

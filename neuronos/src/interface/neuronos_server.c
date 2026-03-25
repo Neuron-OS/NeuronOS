@@ -9,6 +9,10 @@
  *   GET  /health               — Health check
  *   POST /api/chat             — Agent chat (SSE streaming, tool use)
  *   GET  /                     — Chat UI (agent mode) or status page
+ *   GET  /api/files             — List directory / read file
+ *   GET  /api/sessions          — List sessions (stub)
+ *   GET  /api/settings          — Get settings
+ *   PUT  /api/settings          — Update settings
  *
  * No external dependencies — pure POSIX sockets.
  * Designed for: desktop apps, browser clients, mobile apps, Claude Code, OpenCode.
@@ -38,6 +42,8 @@ typedef SOCKET socket_t;
     #include <sys/socket.h>
     #include <unistd.h>
     #include <pthread.h>
+    #include <dirent.h>
+    #include <sys/stat.h>
 typedef int socket_t;
     #define INVALID_SOCK (-1)
     #define close_socket close
@@ -49,6 +55,11 @@ static neuronos_model_t * g_model = NULL;
 static neuronos_tool_registry_t * g_tools = NULL;
 static neuronos_agent_t * g_agent = NULL; /* Non-NULL = agent mode with chat UI */
 
+/* ---- API settings (defaults) ---- */
+static float  g_setting_temperature = 0.7f;
+static int    g_setting_max_tokens  = 256;
+static int    g_setting_max_steps   = 10;
+
 /* Forward declarations for handler functions (used by dispatch_inference) */
 static void send_json(socket_t sock, int status, const char * json);
 static void send_response(socket_t sock, int status_code, const char * status_text,
@@ -57,6 +68,10 @@ static void handle_completions(socket_t sock, const char * body);
 static void handle_chat_completions(socket_t sock, const char * body);
 static void handle_anthropic_messages(socket_t sock, const char * body);
 static void handle_agent_chat(socket_t sock, const char * body);
+static void handle_api_files(socket_t sock, const char * path);
+static void handle_api_sessions(socket_t sock);
+static void handle_api_settings_get(socket_t sock);
+static void handle_api_settings_put(socket_t sock, const char * body);
 
 /* ---- Inference mutex ----
  * The llama.cpp context is NOT thread-safe: only one inference
@@ -226,7 +241,7 @@ static void send_response(socket_t sock, int status_code, const char * status_te
                         "Content-Type: %s\r\n"
                         "Content-Length: %d\r\n"
                         "Access-Control-Allow-Origin: *\r\n"
-                        "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+                        "Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS\r\n"
                         "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
                         "Connection: close\r\n"
                         "\r\n",
@@ -408,6 +423,35 @@ static void free_parsed_msgs(parsed_msg_t * msgs, int count) {
     free(msgs);
 }
 
+/* ---- Query-string helper ---- */
+
+/* Extract the value of a query parameter from a URL path.
+ * e.g. parse_query_param("/api/files?path=src&action=list", "path", buf, 256)
+ * writes "src" into buf.  Returns 0 on success, -1 if not found. */
+static int parse_query_param(const char * url, const char * key, char * buf, size_t bufsize) {
+    buf[0] = '\0';
+    const char * qs = strchr(url, '?');
+    if (!qs) return -1;
+    qs++; /* skip '?' */
+
+    size_t klen = strlen(key);
+    const char * p = qs;
+    while (p && *p) {
+        if (strncmp(p, key, klen) == 0 && p[klen] == '=') {
+            const char * val = p + klen + 1;
+            const char * end = strchr(val, '&');
+            size_t vlen = end ? (size_t)(end - val) : strlen(val);
+            if (vlen >= bufsize) vlen = bufsize - 1;
+            memcpy(buf, val, vlen);
+            buf[vlen] = '\0';
+            return 0;
+        }
+        p = strchr(p, '&');
+        if (p) p++;
+    }
+    return -1;
+}
+
 /* ---- Endpoint Handlers ---- */
 
 static void handle_health(socket_t sock) {
@@ -421,6 +465,136 @@ static void handle_models(socket_t sock) {
                             "\"owned_by\":\"local\","
                             "\"permission\":[]}]}";
     send_json(sock, 200, response);
+}
+
+/* ---- /api/files ---- */
+
+static void handle_api_files(socket_t sock, const char * url_path) {
+    char path[512] = ".";
+    char action[32] = "list";
+    parse_query_param(url_path, "path", path, sizeof(path));
+    parse_query_param(url_path, "action", action, sizeof(action));
+
+    if (strcmp(action, "read") == 0) {
+        /* --- Read a single file --- */
+        FILE * f = fopen(path, "rb");
+        if (!f) {
+            send_json(sock, 404, "{\"error\":{\"message\":\"File not found\"}}");
+            return;
+        }
+        /* Limit to 64 KB */
+        char fbuf[65536];
+        size_t nread = fread(fbuf, 1, sizeof(fbuf) - 1, f);
+        fclose(f);
+        fbuf[nread] = '\0';
+
+        /* Count lines */
+        int lines = 0;
+        for (size_t i = 0; i < nread; i++) {
+            if (fbuf[i] == '\n') lines++;
+        }
+        if (nread > 0 && fbuf[nread - 1] != '\n') lines++;
+
+        char * escaped = nj_escape(fbuf);
+        if (!escaped) {
+            send_json(sock, 500, "{\"error\":{\"message\":\"Memory allocation failed\"}}");
+            return;
+        }
+        char * epath = nj_escape(path);
+        if (!epath) { free(escaped); send_json(sock, 500, "{\"error\":{\"message\":\"Memory allocation failed\"}}"); return; }
+
+        size_t resp_cap = strlen(escaped) + strlen(epath) + 128;
+        char * resp = malloc(resp_cap);
+        if (!resp) { free(escaped); free(epath); send_json(sock, 500, "{\"error\":{\"message\":\"Memory allocation failed\"}}"); return; }
+
+        snprintf(resp, resp_cap,
+                 "{\"path\":\"%s\",\"content\":\"%s\",\"lines\":%d}",
+                 epath, escaped, lines);
+        send_json(sock, 200, resp);
+        free(resp);
+        free(escaped);
+        free(epath);
+    } else {
+        /* --- List directory (default) --- */
+        char buf[16384];
+        int pos = 0;
+        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "{\"files\":[");
+        int first = 1;
+
+#ifdef _WIN32
+        char search[1024];
+        snprintf(search, sizeof(search), "%s\\*", path);
+        WIN32_FIND_DATAA fdata;
+        HANDLE hFind = FindFirstFileA(search, &fdata);
+        if (hFind == INVALID_HANDLE_VALUE) {
+            send_json(sock, 404, "{\"error\":{\"message\":\"Cannot open directory\"}}");
+            return;
+        }
+        do {
+            if (strcmp(fdata.cFileName, ".") == 0 || strcmp(fdata.cFileName, "..") == 0)
+                continue;
+            if (!first) pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, ",");
+            const char * type = (fdata.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? "dir" : "file";
+            pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
+                "{\"name\":\"%s\",\"type\":\"%s\"}", fdata.cFileName, type);
+            first = 0;
+            if (pos >= (int)sizeof(buf) - 200) break;
+        } while (FindNextFileA(hFind, &fdata));
+        FindClose(hFind);
+#else
+        DIR * dir = opendir(path);
+        if (!dir) {
+            send_json(sock, 404, "{\"error\":{\"message\":\"Cannot open directory\"}}");
+            return;
+        }
+        struct dirent * entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+                continue;
+            if (!first) pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, ",");
+            const char * type = (entry->d_type == DT_DIR) ? "dir" : "file";
+            pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
+                "{\"name\":\"%s\",\"type\":\"%s\"}", entry->d_name, type);
+            first = 0;
+            if (pos >= (int)sizeof(buf) - 200) break;
+        }
+        closedir(dir);
+#endif
+
+        snprintf(buf + pos, sizeof(buf) - (size_t)pos, "]}");
+        send_json(sock, 200, buf);
+    }
+}
+
+/* ---- /api/sessions (stub) ---- */
+
+static void handle_api_sessions(socket_t sock) {
+    send_json(sock, 200, "{\"sessions\":[]}");
+}
+
+/* ---- /api/settings ---- */
+
+static void handle_api_settings_get(socket_t sock) {
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+             "{\"temperature\":%.2f,\"max_tokens\":%d,\"max_steps\":%d}",
+             (double)g_setting_temperature, g_setting_max_tokens, g_setting_max_steps);
+    send_json(sock, 200, buf);
+}
+
+static void handle_api_settings_put(socket_t sock, const char * body) {
+    /* Parse and update whichever fields are present */
+    float t = nj_find_float(body, "temperature", -1.0f);
+    if (t >= 0.0f) g_setting_temperature = t;
+
+    int mt = nj_find_int(body, "max_tokens", -1);
+    if (mt > 0) g_setting_max_tokens = mt;
+
+    int ms = nj_find_int(body, "max_steps", -1);
+    if (ms > 0) g_setting_max_steps = ms;
+
+    /* Return updated settings */
+    handle_api_settings_get(sock);
 }
 
 static void handle_completions(socket_t sock, const char * body) {
@@ -544,7 +718,7 @@ static void send_sse_headers(socket_t sock) {
                            "Cache-Control: no-cache\r\n"
                            "Connection: keep-alive\r\n"
                            "Access-Control-Allow-Origin: *\r\n"
-                           "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+                           "Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS\r\n"
                            "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
                            "\r\n";
     send(sock, headers, strlen(headers), 0);
@@ -1206,6 +1380,14 @@ neuronos_status_t neuronos_server_start(neuronos_model_t * model, neuronos_tool_
                     handle_models(client_fd);
                 } else if (strcmp(req.path, "/") == 0) {
                     handle_root(client_fd, req.accept_gzip);
+                } else if (strncmp(req.path, "/api/files", 10) == 0) {
+                    handle_api_files(client_fd, req.path);
+                } else if (strcmp(req.path, "/api/sessions") == 0) {
+                    handle_api_sessions(client_fd);
+                } else if (strcmp(req.path, "/api/settings") == 0 && strcmp(req.method, "PUT") == 0) {
+                    handle_api_settings_put(client_fd, req.body);
+                } else if (strcmp(req.path, "/api/settings") == 0) {
+                    handle_api_settings_get(client_fd);
                 } else if (strcmp(req.path, "/v1/completions") == 0 && strcmp(req.method, "POST") == 0) {
                     dispatch_inference(client_fd, REQ_COMPLETIONS, req.body);
                     dispatched = true;

@@ -187,6 +187,7 @@ typedef neuronos_tool_result_t (*neuronos_tool_fn_t)(const char * args_json, voi
 #define NEURONOS_CAP_MEMORY (1u << 3)
 #define NEURONOS_CAP_SENSOR (1u << 4)
 #define NEURONOS_CAP_GPIO (1u << 5)
+#define NEURONOS_CAP_GIT (1u << 6)
 #define NEURONOS_CAP_ALL (0xFFFFFFFFu)
 
 /* Tool descriptor */
@@ -256,6 +257,12 @@ typedef void (*neuronos_agent_step_cb)(int step, const char * thought,
                                        const char * action, /* tool name or "final_answer" */
                                        const char * observation, void * user_data);
 
+/* Tool approval callback: called before executing a tool.
+ * Return true to allow, false to deny.
+ * If NULL, all tools are auto-approved. */
+typedef bool (*neuronos_tool_approve_cb)(const char * tool_name, const char * args_json,
+                                         void * user_data);
+
 typedef struct {
     char * text; /* final answer (caller frees) */
     int steps_taken;
@@ -300,6 +307,12 @@ void neuronos_agent_result_free(neuronos_agent_result_t * result);
 
 /* Set system prompt (default is built-in ReAct prompt) */
 void neuronos_agent_set_system_prompt(neuronos_agent_t * agent, const char * system_prompt);
+
+/* Set a tool approval callback (human-in-the-loop).
+ * If set, the agent will call this before executing any tool.
+ * Read-only tools are typically auto-approved. */
+void neuronos_agent_set_tool_approval(neuronos_agent_t * agent, neuronos_tool_approve_cb cb,
+                                       void * user_data);
 
 /* ============================================================
  * MEMORY: SQLite-backed persistent memory (MemGPT-inspired)

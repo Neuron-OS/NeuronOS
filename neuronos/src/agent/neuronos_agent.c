@@ -21,10 +21,14 @@
 /* ---- Built-in GBNF grammar for tool_call/final_answer (one-shot mode) ---- */
 static const char TOOL_CALL_GRAMMAR[] =
     "root ::= ws \"{\" ws step ws \"}\" ws\n"
-    "step ::= tool-call | final-answer\n"
+    "step ::= tool-call | tool-calls | final-answer\n"
     "tool-call ::= \"\\\"thought\\\"\" ws \":\" ws string ws \",\" ws "
     "\"\\\"action\\\"\" ws \":\" ws string ws \",\" ws "
     "\"\\\"args\\\"\" ws \":\" ws object\n"
+    "tool-calls ::= \"\\\"thought\\\"\" ws \":\" ws string ws \",\" ws "
+    "\"\\\"tools\\\"\" ws \":\" ws \"[\" ws tool-array-item (ws \",\" ws tool-array-item)* ws \"]\"\n"
+    "tool-array-item ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws string ws \",\" ws "
+    "\"\\\"args\\\"\" ws \":\" ws object ws \"}\"\n"
     "final-answer ::= \"\\\"thought\\\"\" ws \":\" ws string ws \",\" ws "
     "\"\\\"answer\\\"\" ws \":\" ws string\n"
     "object ::= \"{\" ws \"}\" | \"{\" ws members ws \"}\"\n"
@@ -46,11 +50,15 @@ static const char TOOL_CALL_GRAMMAR[] =
 /* ---- Interactive GBNF grammar: reply OR tool_call OR final_answer ---- */
 static const char INTERACTIVE_GRAMMAR[] =
     "root ::= ws \"{\" ws content ws \"}\" ws\n"
-    "content ::= reply-content | tool-content | answer-content\n"
+    "content ::= reply-content | tool-content | tools-content | answer-content\n"
     "reply-content ::= \"\\\"reply\\\"\" ws \":\" ws string\n"
     "tool-content ::= \"\\\"thought\\\"\" ws \":\" ws string ws \",\" ws "
     "\"\\\"action\\\"\" ws \":\" ws string ws \",\" ws "
     "\"\\\"args\\\"\" ws \":\" ws object\n"
+    "tools-content ::= \"\\\"thought\\\"\" ws \":\" ws string ws \",\" ws "
+    "\"\\\"tools\\\"\" ws \":\" ws \"[\" ws tool-array-item (ws \",\" ws tool-array-item)* ws \"]\"\n"
+    "tool-array-item ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws string ws \",\" ws "
+    "\"\\\"args\\\"\" ws \":\" ws object ws \"}\"\n"
     "answer-content ::= \"\\\"thought\\\"\" ws \":\" ws string ws \",\" ws "
     "\"\\\"answer\\\"\" ws \":\" ws string\n"
     "object ::= \"{\" ws \"}\" | \"{\" ws members ws \"}\"\n"
@@ -222,6 +230,48 @@ static char * compact_step_summary(const char ** step_actions, const char ** ste
     return summary;
 }
 
+/*
+ * Use the LLM itself to produce a concise summary of agent steps.
+ * Returns newly allocated string on success, NULL on failure (caller
+ * should fall back to compact_step_summary).
+ */
+static char * compact_with_llm(neuronos_model_t * model, const char * full_text,
+                               int max_output_tokens) {
+    if (!model || !full_text || !full_text[0]) return NULL;
+
+    const char * prefix = "Summarize the following agent steps concisely, "
+                          "keeping key findings and results:\n\n";
+    size_t prompt_len = strlen(prefix) + strlen(full_text) + 1;
+    char * prompt = malloc(prompt_len);
+    if (!prompt) return NULL;
+    snprintf(prompt, prompt_len, "%s%s", prefix, full_text);
+
+    neuronos_gen_params_t params = {
+        .prompt       = prompt,
+        .max_tokens   = max_output_tokens > 0 ? max_output_tokens : 256,
+        .temperature  = 0.3f,
+        .top_p        = 0.95f,
+        .top_k        = 40,
+        .grammar      = NULL,
+        .grammar_root = NULL,
+        .on_token     = NULL,
+        .user_data    = NULL,
+        .seed         = 0,
+    };
+
+    neuronos_gen_result_t gen = neuronos_generate(model, params);
+    free(prompt);
+
+    if (gen.status != NEURONOS_OK || !gen.text) {
+        neuronos_gen_result_free(&gen);
+        return NULL;
+    }
+
+    char * result = strdup(gen.text);
+    neuronos_gen_result_free(&gen);
+    return result;
+}
+
 /* ---- Internal agent struct ---- */
 struct neuronos_agent {
     neuronos_model_t * model;
@@ -231,6 +281,10 @@ struct neuronos_agent {
     char * interactive_prompt;      /* prompt for interactive mode (with reply) */
     neuronos_memory_t * memory;     /* optional persistent memory (not owned) */
     int64_t session_id;             /* current recall memory session */
+
+    /* Tool approval (human-in-the-loop) */
+    neuronos_tool_approve_cb approve_cb;
+    void * approve_data;
 
     /* Conversation history for multi-turn interactive mode */
     char ** conv_roles;             /* role strings (owned copies) */
@@ -517,6 +571,13 @@ void neuronos_agent_set_memory(neuronos_agent_t * agent, neuronos_memory_t * mem
     }
 }
 
+void neuronos_agent_set_tool_approval(neuronos_agent_t * agent, neuronos_tool_approve_cb cb,
+                                       void * user_data) {
+    if (!agent) return;
+    agent->approve_cb = cb;
+    agent->approve_data = user_data;
+}
+
 /*
  * Build enriched system prompt with core memory blocks and A/R stats.
  * Called when memory is attached and before each agent run.
@@ -554,6 +615,149 @@ static char * build_memory_enriched_prompt(const neuronos_agent_t * agent, const
 
     free(core_dump);
     return enriched;
+}
+
+/* ---- Multi-tool execution helper ----
+ *
+ * Given a "tools" JSON array string (e.g. [{"action":"x","args":{...}}, ...]),
+ * iterate through each item, execute the tool, and build a combined observation
+ * string plus a combined action label (e.g. "tool1+tool2").
+ *
+ * Returns 1 if at least one tool was executed, 0 otherwise.
+ * Caller must free *out_actions and *out_observations.
+ */
+static int execute_multi_tools(neuronos_agent_t * agent, const char * tools_json,
+                               neuronos_agent_step_cb on_step, void * user_data, int step,
+                               const char * thought,
+                               char ** out_actions, char ** out_observations) {
+    if (!tools_json || !agent->tools) return 0;
+
+    /* We'll scan for each {"action": pattern in the array */
+    size_t act_cap = 256, obs_cap = 512;
+    char * all_actions = malloc(act_cap);
+    char * all_obs = malloc(obs_cap);
+    if (!all_actions || !all_obs) {
+        free(all_actions);
+        free(all_obs);
+        return 0;
+    }
+    all_actions[0] = '\0';
+    all_obs[0] = '\0';
+    size_t act_len = 0, obs_len = 0;
+    int count = 0;
+
+    const char * p = tools_json;
+    /* Skip opening '[' */
+    while (*p && *p != '[') p++;
+    if (*p == '[') p++;
+
+    /* Scan for each tool object: find '{' ... '}' pairs at array level */
+    while (*p) {
+        /* Skip to next '{' */
+        while (*p && *p != '{') p++;
+        if (!*p) break;
+
+        /* Find the matching '}' — track brace depth */
+        int depth = 0;
+        const char * obj_start = p;
+        int in_string = 0;
+        const char * scan = p;
+        while (*scan) {
+            if (*scan == '"' && (scan == obj_start || *(scan - 1) != '\\'))
+                in_string = !in_string;
+            if (!in_string) {
+                if (*scan == '{') depth++;
+                else if (*scan == '}') { depth--; if (depth == 0) break; }
+            }
+            scan++;
+        }
+        if (*scan != '}') break;
+
+        /* Extract substring for this tool object */
+        size_t obj_len = (size_t)(scan - obj_start + 1);
+        char * obj = malloc(obj_len + 1);
+        if (!obj) break;
+        memcpy(obj, obj_start, obj_len);
+        obj[obj_len] = '\0';
+
+        /* Parse action + args from this object */
+        char * action = nj_alloc_str(obj, "action");
+        char * args = nj_extract_object(obj, "args");
+        free(obj);
+
+        if (action) {
+            if (agent->params.verbose) {
+                fprintf(stderr, "[neuronos] Multi-tool [%d]: %s(%s)\n",
+                        count, action, args ? args : "{}");
+            }
+
+            const char * obs;
+            neuronos_tool_result_t tool_result = {0};
+
+            /* Check tool approval callback */
+            if (agent->approve_cb &&
+                !agent->approve_cb(action, args ? args : "{}", agent->approve_data)) {
+                obs = "Tool execution denied by user";
+            } else {
+                tool_result = neuronos_tool_execute(agent->tools, action, args ? args : "{}");
+                obs = tool_result.success ? tool_result.output
+                                          : (tool_result.error ? tool_result.error : "Tool execution failed");
+            }
+
+            if (on_step) {
+                on_step(step, thought, action, obs, user_data);
+            }
+
+            if (agent->params.verbose) {
+                fprintf(stderr, "[neuronos] Observation [%d]: %.200s%s\n",
+                        count, obs, strlen(obs) > 200 ? "..." : "");
+            }
+
+            /* Append action label */
+            size_t alen = strlen(action);
+            size_t need_a = act_len + alen + 2; /* +1 for '+' separator, +1 for NUL */
+            if (need_a > act_cap) {
+                while (need_a > act_cap) act_cap *= 2;
+                char * tmp = realloc(all_actions, act_cap);
+                if (!tmp) { free(action); free(args); neuronos_tool_result_free(&tool_result); break; }
+                all_actions = tmp;
+            }
+            if (count > 0) { all_actions[act_len++] = '+'; }
+            memcpy(all_actions + act_len, action, alen);
+            act_len += alen;
+            all_actions[act_len] = '\0';
+
+            /* Append observation with label */
+            size_t olen = strlen(obs);
+            size_t need_o = obs_len + alen + olen + 32;
+            if (need_o > obs_cap) {
+                while (need_o > obs_cap) obs_cap *= 2;
+                char * tmp = realloc(all_obs, obs_cap);
+                if (!tmp) { free(action); free(args); neuronos_tool_result_free(&tool_result); break; }
+                all_obs = tmp;
+            }
+            int written = snprintf(all_obs + obs_len, obs_cap - obs_len,
+                                   "%s[%s]: %s", count > 0 ? "\n" : "", action, obs);
+            if (written > 0) obs_len += (size_t)written;
+
+            neuronos_tool_result_free(&tool_result);
+            count++;
+        }
+
+        free(action);
+        free(args);
+        p = scan + 1;
+    }
+
+    if (count > 0) {
+        *out_actions = all_actions;
+        *out_observations = all_obs;
+        return 1;
+    }
+
+    free(all_actions);
+    free(all_obs);
+    return 0;
 }
 
 /* ============================================================
@@ -634,9 +838,42 @@ neuronos_agent_result_t neuronos_agent_run(neuronos_agent_t * agent, const char 
                                 first_active_step + 1, compact_end);
                     }
 
-                    /* Build new summary, merge with existing if present */
-                    char * new_summary = compact_step_summary(
-                        step_actions, step_observations, first_active_step, compact_end);
+                    /* Build new summary: try LLM-based compaction first, fall
+                     * back to simple string truncation if it fails. */
+                    char * new_summary = NULL;
+
+                    /* Assemble full text of steps to compact for LLM */
+                    {
+                        size_t full_cap = 512;
+                        char * full_text = malloc(full_cap);
+                        if (full_text) {
+                            size_t fl = 0;
+                            for (int i = first_active_step; i < compact_end; i++) {
+                                const char * a = step_actions[i] ? step_actions[i] : "unknown";
+                                const char * o = step_observations[i] ? step_observations[i] : "";
+                                size_t need = strlen(a) + strlen(o) + 32;
+                                while (fl + need > full_cap) {
+                                    full_cap *= 2;
+                                    void * tmp = realloc(full_text, full_cap);
+                                    if (!tmp) { free(full_text); full_text = NULL; break; }
+                                    full_text = tmp;
+                                }
+                                if (!full_text) break;
+                                fl += (size_t)snprintf(full_text + fl, full_cap - fl,
+                                    "Action: %s\nObservation: %s\n\n", a, o);
+                            }
+                            if (full_text) {
+                                new_summary = compact_with_llm(agent->model, full_text, 256);
+                                free(full_text);
+                            }
+                        }
+                    }
+
+                    /* Fallback to simple truncation-based compaction */
+                    if (!new_summary) {
+                        new_summary = compact_step_summary(
+                            step_actions, step_observations, first_active_step, compact_end);
+                    }
 
                     if (context_summary && new_summary) {
                         /* Merge old + new summary */
@@ -744,7 +981,32 @@ neuronos_agent_result_t neuronos_agent_run(neuronos_agent_t * agent, const char 
             goto cleanup;
         }
 
-        /* ---- Tool call path ---- */
+        /* ---- Multi-tool call path ---- */
+        char * tools_arr = nj_extract_array(step_outputs[step], "tools");
+        if (tools_arr && agent->tools) {
+            char * multi_actions = NULL;
+            char * multi_obs = NULL;
+
+            if (execute_multi_tools(agent, tools_arr, on_step, user_data,
+                                    step, thought, &multi_actions, &multi_obs)) {
+                step_actions[step] = multi_actions;
+                step_observations[step] = multi_obs;
+            } else {
+                /* Parsing failed — treat as error */
+                step_observations[step] = strdup("Error: failed to parse tools array.");
+                step_actions[step] = strdup("error");
+            }
+
+            free(tools_arr);
+            free(thought);
+            free(answer);
+            free(action);
+            free(args);
+            continue;
+        }
+        free(tools_arr);
+
+        /* ---- Single tool call path ---- */
         if (action && agent->tools) {
             step_actions[step] = strdup(action);
 
@@ -752,10 +1014,18 @@ neuronos_agent_result_t neuronos_agent_run(neuronos_agent_t * agent, const char 
                 fprintf(stderr, "[neuronos] Tool: %s(%s)\n", action, args ? args : "{}");
             }
 
-            neuronos_tool_result_t tool_result = neuronos_tool_execute(agent->tools, action, args ? args : "{}");
+            const char * obs;
+            neuronos_tool_result_t tool_result = {0};
 
-            const char * obs = tool_result.success ? tool_result.output
-                                                   : (tool_result.error ? tool_result.error : "Tool execution failed");
+            /* Check tool approval callback (human-in-the-loop) */
+            if (agent->approve_cb &&
+                !agent->approve_cb(action, args ? args : "{}", agent->approve_data)) {
+                obs = "Tool execution denied by user";
+            } else {
+                tool_result = neuronos_tool_execute(agent->tools, action, args ? args : "{}");
+                obs = tool_result.success ? tool_result.output
+                                          : (tool_result.error ? tool_result.error : "Tool execution failed");
+            }
 
             step_observations[step] = strdup(obs);
 
@@ -1132,7 +1402,34 @@ neuronos_agent_result_t neuronos_agent_chat(neuronos_agent_t * agent, const char
             goto cleanup;
         }
 
-        /* ---- Tool call path ---- */
+        /* ---- Multi-tool call path ---- */
+        char * tools_arr = nj_extract_array(gen.text, "tools");
+        if (tools_arr && agent->tools) {
+            step_outputs[step] = strdup(gen.text);
+            char * multi_actions = NULL;
+            char * multi_obs = NULL;
+
+            if (execute_multi_tools(agent, tools_arr, on_step, user_data,
+                                    step, thought, &multi_actions, &multi_obs)) {
+                step_actions[step] = multi_actions;
+                step_observations[step] = multi_obs;
+            } else {
+                step_observations[step] = strdup("Error: failed to parse tools array.");
+                step_actions[step] = strdup("error");
+            }
+
+            free(tools_arr);
+            free(reply);
+            free(thought);
+            free(answer);
+            free(action);
+            free(args);
+            neuronos_gen_result_free(&gen);
+            continue;
+        }
+        free(tools_arr);
+
+        /* ---- Single tool call path ---- */
         if (action && agent->tools) {
             step_outputs[step] = strdup(gen.text);
             step_actions[step] = strdup(action);
@@ -1145,12 +1442,20 @@ neuronos_agent_result_t neuronos_agent_chat(neuronos_agent_t * agent, const char
                 fprintf(stderr, "[neuronos] Tool: %s(%s)\n", action, args ? args : "{}");
             }
 
-            neuronos_tool_result_t tool_result = neuronos_tool_execute(
-                agent->tools, action, args ? args : "{}");
+            const char * obs;
+            neuronos_tool_result_t tool_result = {0};
 
-            const char * obs = tool_result.success
-                ? tool_result.output
-                : (tool_result.error ? tool_result.error : "Tool execution failed");
+            /* Check tool approval callback (human-in-the-loop) */
+            if (agent->approve_cb &&
+                !agent->approve_cb(action, args ? args : "{}", agent->approve_data)) {
+                obs = "Tool execution denied by user";
+            } else {
+                tool_result = neuronos_tool_execute(
+                    agent->tools, action, args ? args : "{}");
+                obs = tool_result.success
+                    ? tool_result.output
+                    : (tool_result.error ? tool_result.error : "Tool execution failed");
+            }
 
             step_observations[step] = strdup(obs);
 
