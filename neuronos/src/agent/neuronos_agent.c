@@ -158,8 +158,18 @@ static const char INTERACTIVE_PROMPT_LARGE[] =
 
 /* ---- Token estimation ---- */
 static int estimate_tokens(const char * text) {
-    /* Rough estimate: ~3.5 chars per token for mixed English/JSON text */
+    /* Rough fallback: ~3.5 chars per token for mixed English/JSON text */
     return text ? (int)(strlen(text) * 10 / 35) : 0;
+}
+
+/* Accurate token count using the model tokenizer, with heuristic fallback */
+static int count_tokens(const neuronos_model_t * model, const char * text) {
+    if (!text) return 0;
+    if (model) {
+        int n = neuronos_tokenize_count(model, text);
+        if (n >= 0) return n;
+    }
+    return estimate_tokens(text);
 }
 
 /* ---- Step history compaction ---- */
@@ -600,12 +610,13 @@ neuronos_agent_result_t neuronos_agent_run(neuronos_agent_t * agent, const char 
 
         /* ---- Context compaction check ---- */
         if (ctx_capacity > 0 && step >= 3) {
-            /* Estimate total prompt tokens */
-            int est_tokens = estimate_tokens(agent->system_prompt) + estimate_tokens(user_input);
-            if (context_summary) est_tokens += estimate_tokens(context_summary);
+            /* Estimate total prompt tokens (use model tokenizer if available) */
+            int est_tokens = count_tokens(agent->model, agent->system_prompt)
+                           + count_tokens(agent->model, user_input);
+            if (context_summary) est_tokens += count_tokens(agent->model, context_summary);
             for (int i = first_active_step; i < step; i++) {
-                est_tokens += estimate_tokens(step_outputs[i]);
-                est_tokens += estimate_tokens(step_observations[i]);
+                est_tokens += count_tokens(agent->model, step_outputs[i]);
+                est_tokens += count_tokens(agent->model, step_observations[i]);
                 est_tokens += 20; /* overhead per step (role tags, etc.) */
             }
 
@@ -649,7 +660,7 @@ neuronos_agent_result_t neuronos_agent_run(neuronos_agent_t * agent, const char 
                             if (step_outputs[i]) {
                                 neuronos_memory_recall_add(agent->memory, agent->session_id,
                                     "assistant", step_outputs[i],
-                                    estimate_tokens(step_outputs[i]));
+                                    count_tokens(agent->model, step_outputs[i]));
                             }
                         }
                     }
@@ -671,7 +682,7 @@ neuronos_agent_result_t neuronos_agent_run(neuronos_agent_t * agent, const char 
 
         if (agent->params.verbose) {
             fprintf(stderr, "[neuronos] Prompt: %zu chars (~%d tokens), ctx_cap=%d\n",
-                    strlen(prompt), estimate_tokens(prompt), ctx_capacity);
+                    strlen(prompt), count_tokens(agent->model, prompt), ctx_capacity);
         }
 
         /* Generate with grammar constraint */
@@ -818,9 +829,9 @@ void neuronos_agent_result_free(neuronos_agent_result_t * result) {
 
 int neuronos_context_token_count(const neuronos_agent_t * agent) {
     if (!agent || !agent->model) return 0;
-    /* Returns estimated tokens used by system prompt + core memory.
-     * During agent_run, actual token count is tracked per-step internally. */
-    return estimate_tokens(agent->system_prompt);
+    /* Returns token count for system prompt + core memory.
+     * Uses model tokenizer for accuracy, with heuristic fallback. */
+    return count_tokens(agent->model, agent->system_prompt);
 }
 
 int neuronos_context_capacity(const neuronos_agent_t * agent) {
@@ -1033,7 +1044,7 @@ neuronos_agent_result_t neuronos_agent_chat(neuronos_agent_t * agent, const char
 
         if (agent->params.verbose) {
             fprintf(stderr, "[neuronos] Prompt: %zu chars (~%d tokens)\n",
-                    strlen(prompt), estimate_tokens(prompt));
+                    strlen(prompt), count_tokens(agent->model, prompt));
         }
 
         /* Generate with interactive grammar (reply + tool + answer) */

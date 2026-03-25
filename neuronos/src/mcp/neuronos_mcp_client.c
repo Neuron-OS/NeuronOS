@@ -26,44 +26,19 @@
 #include <string.h>
 
 #ifdef _WIN32
-/* ============================================================
- * Windows stub – MCP Client STDIO transport not yet supported.
- * All public functions return error/0/NULL gracefully.
- * This lets the project compile on Windows without ifdef noise
- * in every caller.  When we add Windows named-pipe or TCP
- * transport, these stubs will be replaced.
- * ============================================================ */
-#include <stdio.h>
-#include <stdlib.h>
-
-struct neuronos_mcp_client { int dummy; };
-
-neuronos_mcp_client_t * neuronos_mcp_client_create(void) {
-    fprintf(stderr, "[mcp-client] STDIO transport not supported on Windows yet\n");
-    return NULL;
-}
-int neuronos_mcp_client_add_server(neuronos_mcp_client_t * client,
-                                   const neuronos_mcp_server_config_t * config) {
-    (void)client; (void)config; return -1;
-}
-int neuronos_mcp_client_connect(neuronos_mcp_client_t * client) { (void)client; return -1; }
-int neuronos_mcp_client_tool_count(const neuronos_mcp_client_t * client) { (void)client; return 0; }
-int neuronos_mcp_client_register_tools(neuronos_mcp_client_t * client,
-                                       neuronos_tool_registry_t * registry) { (void)client; (void)registry; return 0; }
-char * neuronos_mcp_client_call_tool(neuronos_mcp_client_t * client,
-                                     const char * tool_name,
-                                     const char * args_json) { (void)client; (void)tool_name; (void)args_json; return NULL; }
-int neuronos_mcp_client_load_config(neuronos_mcp_client_t * client,
-                                    const char * config_path) { (void)client; (void)config_path; return 0; }
-void neuronos_mcp_client_free(neuronos_mcp_client_t * client) { free(client); }
-
-#else /* Unix implementation */
+    #include <windows.h>
+    #include <io.h>
+    /* Windows uses HANDLEs instead of file descriptors for pipes */
+    typedef HANDLE pipe_fd_t;
+    #define INVALID_PIPE INVALID_HANDLE_VALUE
+    typedef DWORD pid_t;
+#else /* Unix */
     #include <fcntl.h>
     #include <sys/wait.h>
     #include <unistd.h>
+    typedef int pipe_fd_t;
+    #define INVALID_PIPE (-1)
 #endif
-
-#ifndef _WIN32 /* Rest of the file is Unix-only */
 
 /* ============================================================
  * CONSTANTS
@@ -97,9 +72,15 @@ typedef struct {
 typedef struct {
     char name[128];                     /* human-readable name               */
     neuronos_mcp_transport_t transport; /* STDIO or HTTP                     */
+#ifdef _WIN32
+    HANDLE h_process;                   /* child process handle              */
+    HANDLE fd_write;                    /* pipe: parent writes -> child stdin */
+    HANDLE fd_read;                     /* pipe: child stdout -> parent reads*/
+#else
     pid_t pid;                          /* child process PID (STDIO)         */
-    int fd_write;                       /* pipe: parent writes → child stdin */
-    int fd_read;                        /* pipe: child stdout → parent reads */
+    int fd_write;                       /* pipe: parent writes -> child stdin */
+    int fd_read;                        /* pipe: child stdout -> parent reads*/
+#endif
     int next_id;                        /* JSON-RPC request ID counter       */
     bool connected;                     /* successfully initialized?         */
     char * read_buf;                    /* line buffer for reading           */
@@ -123,27 +104,40 @@ struct neuronos_mcp_client {
  * STDIO TRANSPORT: fork + exec + pipe
  * ============================================================ */
 
-/* Send a JSON-RPC request to a server. Returns the request ID. */
+/* Send a JSON-RPC request to a server. Returns 0 on success. */
 static int mcp_client_send(mcp_server_conn_t * srv, const char * json) {
-    if (!srv || srv->fd_write < 0 || !json)
+    if (!srv || !json)
         return -1;
 
     size_t len = strlen(json);
     const char newline = '\n';
 
+#ifdef _WIN32
+    if (srv->fd_write == INVALID_HANDLE_VALUE)
+        return -1;
+    DWORD written;
+    if (!WriteFile(srv->fd_write, json, (DWORD)len, &written, NULL) || written == 0) {
+        fprintf(stderr, "[mcp-client] Write error to '%s'\n", srv->name);
+        return -1;
+    }
+    WriteFile(srv->fd_write, &newline, 1, &written, NULL);
+#else
+    if (srv->fd_write < 0)
+        return -1;
     ssize_t w = write(srv->fd_write, json, len);
     if (w < 0) {
         fprintf(stderr, "[mcp-client] Write error to '%s': %s\n", srv->name, strerror(errno));
         return -1;
     }
     write(srv->fd_write, &newline, 1);
+#endif
     return 0;
 }
 
-/* Read a line from the server (blocking, with timeout via poll/select).
+/* Read a line from the server (blocking, with timeout).
  * Returns the line (in srv->read_buf) or NULL on error/timeout. */
 static char * mcp_client_readline(mcp_server_conn_t * srv) {
-    if (!srv || srv->fd_read < 0)
+    if (!srv)
         return NULL;
 
     if (!srv->read_buf) {
@@ -151,6 +145,34 @@ static char * mcp_client_readline(mcp_server_conn_t * srv) {
         if (!srv->read_buf)
             return NULL;
     }
+
+#ifdef _WIN32
+    if (srv->fd_read == INVALID_HANDLE_VALUE)
+        return NULL;
+
+    /* Wait with timeout */
+    DWORD wait_result = WaitForSingleObject(srv->fd_read, MCP_READ_TIMEOUT_MS);
+    if (wait_result != WAIT_OBJECT_0 && wait_result != WAIT_TIMEOUT) {
+        fprintf(stderr, "[mcp-client] Wait error on '%s'\n", srv->name);
+        return NULL;
+    }
+
+    /* Read byte-by-byte until newline */
+    size_t pos = 0;
+    while (pos < MCP_MAX_LINE - 1) {
+        DWORD nread = 0;
+        BOOL ok = ReadFile(srv->fd_read, srv->read_buf + pos, 1, &nread, NULL);
+        if (!ok || nread == 0)
+            break;
+        if (srv->read_buf[pos] == '\n') {
+            srv->read_buf[pos] = '\0';
+            return srv->read_buf;
+        }
+        pos++;
+    }
+#else
+    if (srv->fd_read < 0)
+        return NULL;
 
     /* Use select() for timeout */
     fd_set fds;
@@ -181,6 +203,7 @@ static char * mcp_client_readline(mcp_server_conn_t * srv) {
         }
         pos++;
     }
+#endif
 
     if (pos > 0) {
         srv->read_buf[pos] = '\0';
@@ -259,9 +282,66 @@ static int mcp_server_spawn(mcp_server_conn_t * srv) {
     if (!srv || !srv->command)
         return -1;
 
-    /* Create pipes: parent_to_child and child_to_parent */
-    int pipe_in[2];  /* parent writes → pipe_in[1], child reads ← pipe_in[0] */
-    int pipe_out[2]; /* child writes → pipe_out[1], parent reads ← pipe_out[0] */
+#ifdef _WIN32
+    /* ---- Windows: CreateProcess + anonymous pipes ---- */
+    SECURITY_ATTRIBUTES sa = {sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
+    HANDLE child_stdin_rd, child_stdin_wr;
+    HANDLE child_stdout_rd, child_stdout_wr;
+
+    if (!CreatePipe(&child_stdin_rd, &child_stdin_wr, &sa, 0) ||
+        !CreatePipe(&child_stdout_rd, &child_stdout_wr, &sa, 0)) {
+        fprintf(stderr, "[mcp-client] CreatePipe failed for '%s'\n", srv->name);
+        return -1;
+    }
+
+    /* Ensure parent-side handles are NOT inherited */
+    SetHandleInformation(child_stdin_wr, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(child_stdout_rd, HANDLE_FLAG_INHERIT, 0);
+
+    /* Build command line: "command arg1 arg2 ..." */
+    char cmdline[4096];
+    int pos = snprintf(cmdline, sizeof(cmdline), "\"%s\"", srv->command);
+    for (int i = 0; i < srv->n_args && pos < (int)sizeof(cmdline) - 256; i++) {
+        pos += snprintf(cmdline + pos, sizeof(cmdline) - (size_t)pos, " \"%s\"", srv->args[i]);
+    }
+
+    /* Set environment variables */
+    for (int i = 0; i < srv->n_env; i++) {
+        if (srv->env[i])
+            _putenv(srv->env[i]);
+    }
+
+    STARTUPINFOA si = {sizeof(STARTUPINFOA)};
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = child_stdin_rd;
+    si.hStdOutput = child_stdout_wr;
+    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+
+    PROCESS_INFORMATION pi = {0};
+    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+        fprintf(stderr, "[mcp-client] CreateProcess '%s' failed (error %lu)\n",
+                srv->command, GetLastError());
+        CloseHandle(child_stdin_rd); CloseHandle(child_stdin_wr);
+        CloseHandle(child_stdout_rd); CloseHandle(child_stdout_wr);
+        return -1;
+    }
+
+    /* Close child-side pipe ends in the parent */
+    CloseHandle(child_stdin_rd);
+    CloseHandle(child_stdout_wr);
+    CloseHandle(pi.hThread);
+
+    srv->h_process = pi.hProcess;
+    srv->fd_write = child_stdin_wr;
+    srv->fd_read = child_stdout_rd;
+
+    fprintf(stderr, "[mcp-client] Spawned '%s' (PID %lu): %s\n",
+            srv->name, pi.dwProcessId, srv->command);
+
+#else
+    /* ---- Unix: fork + exec + pipe ---- */
+    int pipe_in[2];  /* parent writes -> pipe_in[1], child reads <- pipe_in[0] */
+    int pipe_out[2]; /* child writes -> pipe_out[1], parent reads <- pipe_out[0] */
 
     if (pipe(pipe_in) < 0 || pipe(pipe_out) < 0) {
         fprintf(stderr, "[mcp-client] pipe() failed: %s\n", strerror(errno));
@@ -278,24 +358,19 @@ static int mcp_server_spawn(mcp_server_conn_t * srv) {
 
     if (pid == 0) {
         /* ---- Child process ---- */
-
-        /* Redirect stdin to pipe_in[0] */
         dup2(pipe_in[0], STDIN_FILENO);
         close(pipe_in[0]);
         close(pipe_in[1]);
 
-        /* Redirect stdout to pipe_out[1] */
         dup2(pipe_out[1], STDOUT_FILENO);
         close(pipe_out[0]);
         close(pipe_out[1]);
 
-        /* Set environment variables */
         for (int i = 0; i < srv->n_env; i++) {
             if (srv->env[i])
-                putenv(srv->env[i]); /* putenv doesn't copy — but we're in child */
+                putenv(srv->env[i]);
         }
 
-        /* Build argv: command + args + NULL */
         int argc = 1 + srv->n_args;
         char ** argv = calloc((size_t)(argc + 1), sizeof(char *));
         if (!argv)
@@ -307,26 +382,23 @@ static int mcp_server_spawn(mcp_server_conn_t * srv) {
         argv[argc] = NULL;
 
         execvp(srv->command, argv);
-
-        /* If we get here, exec failed */
         fprintf(stderr, "[mcp-client] execvp '%s' failed: %s\n", srv->command, strerror(errno));
         _exit(127);
     }
 
     /* ---- Parent process ---- */
-    close(pipe_in[0]);  /* parent doesn't read from child's stdin pipe */
-    close(pipe_out[1]); /* parent doesn't write to child's stdout pipe */
+    close(pipe_in[0]);
+    close(pipe_out[1]);
 
     srv->pid = pid;
     srv->fd_write = pipe_in[1];
     srv->fd_read = pipe_out[0];
 
-    /* Set non-blocking flags could be useful but we use select() */
-
     fprintf(stderr, "[mcp-client] Spawned '%s' (PID %d): %s", srv->name, pid, srv->command);
     for (int i = 0; i < srv->n_args; i++)
         fprintf(stderr, " %s", srv->args[i]);
     fprintf(stderr, "\n");
+#endif
 
     return 0;
 }
@@ -499,6 +571,22 @@ static void mcp_server_stop(mcp_server_conn_t * srv) {
     if (!srv)
         return;
 
+#ifdef _WIN32
+    if (srv->fd_write != INVALID_HANDLE_VALUE) {
+        CloseHandle(srv->fd_write);
+        srv->fd_write = INVALID_HANDLE_VALUE;
+    }
+    if (srv->fd_read != INVALID_HANDLE_VALUE) {
+        CloseHandle(srv->fd_read);
+        srv->fd_read = INVALID_HANDLE_VALUE;
+    }
+    if (srv->h_process) {
+        TerminateProcess(srv->h_process, 0);
+        WaitForSingleObject(srv->h_process, 1000);
+        CloseHandle(srv->h_process);
+        srv->h_process = NULL;
+    }
+#else
     if (srv->fd_write >= 0) {
         close(srv->fd_write);
         srv->fd_write = -1;
@@ -507,13 +595,13 @@ static void mcp_server_stop(mcp_server_conn_t * srv) {
         close(srv->fd_read);
         srv->fd_read = -1;
     }
-
     if (srv->pid > 0) {
         kill(srv->pid, SIGTERM);
         int status;
         waitpid(srv->pid, &status, WNOHANG);
         srv->pid = -1;
     }
+#endif
 
     free(srv->read_buf);
     srv->read_buf = NULL;
@@ -728,9 +816,15 @@ neuronos_mcp_client_t * neuronos_mcp_client_create(void) {
 
     /* Initialize server slots */
     for (int i = 0; i < MCP_MAX_SERVERS; i++) {
+#ifdef _WIN32
+        client->servers[i].h_process = NULL;
+        client->servers[i].fd_write = INVALID_HANDLE_VALUE;
+        client->servers[i].fd_read = INVALID_HANDLE_VALUE;
+#else
         client->servers[i].pid = -1;
         client->servers[i].fd_write = -1;
         client->servers[i].fd_read = -1;
+#endif
         client->servers[i].next_id = 1;
     }
 
@@ -1165,5 +1259,3 @@ void neuronos_mcp_client_free(neuronos_mcp_client_t * client) {
 
     free(client);
 }
-
-#endif /* !_WIN32 */

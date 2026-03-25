@@ -94,6 +94,11 @@ neuronos_model_info_t neuronos_model_info(const neuronos_model_t * model);
 /* Get the active context size (number of tokens allocated) */
 int neuronos_model_context_size(const neuronos_model_t * model);
 
+/* Count tokens for a text string using the model's tokenizer.
+ * Returns exact token count, or -1 on error.
+ * Much more accurate than heuristic estimation (chars/3.5). */
+int neuronos_tokenize_count(const neuronos_model_t * model, const char * text);
+
 /* ============================================================
  * GENERATE: Text generation (inference)
  * ============================================================ */

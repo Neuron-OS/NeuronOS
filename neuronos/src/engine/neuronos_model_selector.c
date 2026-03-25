@@ -769,8 +769,14 @@ neuronos_tuned_params_t neuronos_auto_tune(const neuronos_hw_info_t * hw, const 
     /* Round to nearest 512 */
     t.n_ctx = (ctx_capacity / 512) * 512;
 
-    /* Flash attention: enable if we're on a capable build */
-    t.flash_attn = false; /* TODO: detect from llama.cpp build flags */
+    /* Flash attention: enabled on all non-WASM builds.
+     * The engine (neuronos_engine.c) sets cparams.flash_attn = true
+     * for native builds; disabled on WASM to avoid OOB in linear memory. */
+#ifdef __EMSCRIPTEN__
+    t.flash_attn = false;
+#else
+    t.flash_attn = true;
+#endif
 
     /* mmap: always true (lazy page loading, reduces RSS) */
     t.use_mmap = true;

@@ -102,6 +102,7 @@ set(ENGINE_SOURCES
     src/engine/neuronos_model_selector.c
     src/engine/neuronos_model_registry.c
     src/util/neuronos_json.c
+    src/util/neuronos_log.c
 )
 
 add_library(neuronos_engine STATIC ${ENGINE_SOURCES})
@@ -281,7 +282,7 @@ target_include_directories(neuronos_interface
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/interface
             ${CMAKE_CURRENT_SOURCE_DIR}/src/mcp
 )
-target_link_libraries(neuronos_interface PUBLIC neuronos_engine)
+target_link_libraries(neuronos_interface PUBLIC neuronos_engine Threads::Threads)
 if(TARGET neuronos_webui)
     add_dependencies(neuronos_interface neuronos_webui)
 endif()

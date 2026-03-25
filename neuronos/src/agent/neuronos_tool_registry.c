@@ -5,6 +5,7 @@
  * Phase 2C: tool registration and dispatch.
  * ============================================================ */
 #include "neuronos/neuronos.h"
+#include "neuronos/neuronos_json.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -275,41 +276,12 @@ static neuronos_tool_result_t tool_shell(const char * args_json, void * user_dat
     (void)user_data;
     neuronos_tool_result_t result = {0};
 
-    /* Minimal JSON parsing: extract "command" field */
-    const char * cmd_start = strstr(args_json, "\"command\"");
-    if (!cmd_start) {
-        result.success = false;
-        result.error = strdup("Missing 'command' argument");
-        return result;
-    }
-
-    /* Find the value string */
-    cmd_start = strchr(cmd_start + 9, '"');
-    if (!cmd_start) {
-        result.success = false;
-        result.error = strdup("Invalid 'command' format");
-        return result;
-    }
-    cmd_start++; /* skip opening quote */
-
-    /* Find closing quote (handle escapes simply) */
-    const char * cmd_end = cmd_start;
-    while (*cmd_end && *cmd_end != '"') {
-        if (*cmd_end == '\\')
-            cmd_end++; /* skip escaped char */
-        if (*cmd_end)
-            cmd_end++;
-    }
-
-    size_t cmd_len = (size_t)(cmd_end - cmd_start);
-    char * command = malloc(cmd_len + 1);
+    char * command = nj_alloc_str(args_json, "command");
     if (!command) {
         result.success = false;
-        result.error = strdup("error: out of memory");
+        result.error = strdup("Missing or invalid 'command' argument");
         return result;
     }
-    memcpy(command, cmd_start, cmd_len);
-    command[cmd_len] = '\0';
 
     /* Execute with popen */
     FILE * fp = popen(command, "r");
@@ -364,48 +336,16 @@ static neuronos_tool_result_t tool_read_file(const char * args_json, void * user
     (void)user_data;
     neuronos_tool_result_t result = {0};
 
-    const char * path_start = strstr(args_json, "\"path\"");
-    if (!path_start) {
-        result.success = false;
-        result.error = strdup("Missing 'path' argument");
-        return result;
-    }
-    path_start = strchr(path_start + 6, '"');
-    if (!path_start) {
-        result.success = false;
-        result.error = strdup("Invalid 'path'");
-        return result;
-    }
-    path_start++;
-    const char * path_end = strchr(path_start, '"');
-    if (!path_end) {
-        result.success = false;
-        result.error = strdup("Invalid 'path'");
-        return result;
-    }
-
-    size_t path_len = (size_t)(path_end - path_start);
-    char * path = malloc(path_len + 1);
+    char * path = nj_alloc_str(args_json, "path");
     if (!path) {
         result.success = false;
-        result.error = strdup("error: out of memory");
+        result.error = strdup("Missing or invalid 'path' argument");
         return result;
     }
-    memcpy(path, path_start, path_len);
-    path[path_len] = '\0';
 
     /* Optional: extract start_line and end_line (1-indexed) */
-    int start_line = 0, end_line = 0;
-    const char * sl = strstr(args_json, "\"start_line\"");
-    if (sl) {
-        sl = strchr(sl + 12, ':');
-        if (sl) start_line = atoi(sl + 1);
-    }
-    const char * el = strstr(args_json, "\"end_line\"");
-    if (el) {
-        el = strchr(el + 10, ':');
-        if (el) end_line = atoi(el + 1);
-    }
+    int start_line = nj_find_int(args_json, "start_line", 0);
+    int end_line = nj_find_int(args_json, "end_line", 0);
 
     FILE * fp = fopen(path, "r");
     if (!fp) {
@@ -524,85 +464,34 @@ static neuronos_tool_result_t tool_write_file(const char * args_json, void * use
     (void)user_data;
     neuronos_tool_result_t result = {0};
 
-    /* Extract path */
-    const char * path_start = strstr(args_json, "\"path\"");
-    if (!path_start) {
-        result.success = false;
-        result.error = strdup("Missing 'path'");
-        return result;
-    }
-    path_start = strchr(path_start + 6, '"');
-    if (!path_start) {
-        result.success = false;
-        result.error = strdup("Invalid 'path'");
-        return result;
-    }
-    path_start++;
-    const char * path_end = strchr(path_start, '"');
-    if (!path_end) {
-        result.success = false;
-        result.error = strdup("Invalid 'path'");
-        return result;
-    }
-
-    size_t path_len = (size_t)(path_end - path_start);
-    char * path = malloc(path_len + 1);
+    char * path = nj_alloc_str(args_json, "path");
     if (!path) {
         result.success = false;
-        result.error = strdup("error: out of memory");
+        result.error = strdup("Missing or invalid 'path' argument");
         return result;
-    }
-    memcpy(path, path_start, path_len);
-    path[path_len] = '\0';
-
-    /* Extract content */
-    const char * cnt_start = strstr(args_json, "\"content\"");
-    if (!cnt_start) {
-        free(path);
-        result.success = false;
-        result.error = strdup("Missing 'content'");
-        return result;
-    }
-    cnt_start = strchr(cnt_start + 9, '"');
-    if (!cnt_start) {
-        free(path);
-        result.success = false;
-        result.error = strdup("Invalid 'content'");
-        return result;
-    }
-    cnt_start++;
-    const char * cnt_end = cnt_start;
-    while (*cnt_end && *cnt_end != '"') {
-        if (*cnt_end == '\\')
-            cnt_end++;
-        if (*cnt_end)
-            cnt_end++;
     }
 
-    size_t cnt_len = (size_t)(cnt_end - cnt_start);
-    char * content = malloc(cnt_len + 1);
+    /* Extract content — use nj_find_str to get pointer+length (avoids extra alloc for large content) */
+    int cnt_len = 0;
+    const char * content = nj_find_str(args_json, "content", &cnt_len);
     if (!content) {
         free(path);
         result.success = false;
-        result.error = strdup("error: out of memory");
+        result.error = strdup("Missing or invalid 'content' argument");
         return result;
     }
-    memcpy(content, cnt_start, cnt_len);
-    content[cnt_len] = '\0';
 
     FILE * fp = fopen(path, "w");
     free(path);
 
     if (!fp) {
-        free(content);
         result.success = false;
         result.error = strdup("Cannot write file");
         return result;
     }
 
-    fwrite(content, 1, cnt_len, fp);
+    fwrite(content, 1, (size_t)cnt_len, fp);
     fclose(fp);
-    free(content);
 
     result.success = true;
     result.output = strdup("File written successfully");
@@ -614,28 +503,15 @@ static neuronos_tool_result_t tool_calculate(const char * args_json, void * user
     (void)user_data;
     neuronos_tool_result_t result = {0};
 
-    /* Simple: extract "expression" and eval via shell bc */
-    const char * expr_start = strstr(args_json, "\"expression\"");
+    /* Extract "expression" and eval via shell bc */
+    int expr_len_i = 0;
+    const char * expr_start = nj_find_str(args_json, "expression", &expr_len_i);
     if (!expr_start) {
         result.success = false;
-        result.error = strdup("Missing 'expression' argument");
+        result.error = strdup("Missing or invalid 'expression' argument");
         return result;
     }
-    expr_start = strchr(expr_start + 12, '"');
-    if (!expr_start) {
-        result.success = false;
-        result.error = strdup("Invalid 'expression'");
-        return result;
-    }
-    expr_start++;
-    const char * expr_end = strchr(expr_start, '"');
-    if (!expr_end) {
-        result.success = false;
-        result.error = strdup("Invalid 'expression'");
-        return result;
-    }
-
-    size_t expr_len = (size_t)(expr_end - expr_start);
+    size_t expr_len = (size_t)expr_len_i;
 
     /* Validate expression: reject shell metacharacters */
     if (!is_safe_math_expression(expr_start, expr_len)) {
@@ -686,36 +562,12 @@ static neuronos_tool_result_t tool_list_dir(const char * args_json, void * user_
     (void)user_data;
     neuronos_tool_result_t result = {0};
 
-    /* Extract "path" from JSON */
-    const char * path_start = strstr(args_json, "\"path\"");
-    if (!path_start) {
-        result.success = false;
-        result.error = strdup("Missing 'path' argument");
-        return result;
-    }
-    path_start = strchr(path_start + 6, '"');
-    if (!path_start) {
-        result.success = false;
-        result.error = strdup("Invalid 'path'");
-        return result;
-    }
-    path_start++;
-    const char * path_end = strchr(path_start, '"');
-    if (!path_end) {
-        result.success = false;
-        result.error = strdup("Invalid 'path'");
-        return result;
-    }
-
-    size_t plen = (size_t)(path_end - path_start);
-    char * path = malloc(plen + 1);
+    char * path = nj_alloc_str(args_json, "path");
     if (!path) {
         result.success = false;
-        result.error = strdup("error: out of memory");
+        result.error = strdup("Missing or invalid 'path' argument");
         return result;
     }
-    memcpy(path, path_start, plen);
-    path[plen] = '\0';
 
     /* Build JSON array of entries */
     char buf[8192];
@@ -784,47 +636,19 @@ static neuronos_tool_result_t tool_search_files(const char * args_json, void * u
     neuronos_tool_result_t result = {0};
 
     /* Extract "pattern" and optional "directory" */
-    const char * pat_start = strstr(args_json, "\"pattern\"");
+    int pat_len_i = 0;
+    const char * pat_start = nj_find_str(args_json, "pattern", &pat_len_i);
     if (!pat_start) {
         result.success = false;
-        result.error = strdup("Missing 'pattern' argument");
+        result.error = strdup("Missing or invalid 'pattern' argument");
         return result;
     }
-    pat_start = strchr(pat_start + 9, '"');
-    if (!pat_start) {
-        result.success = false;
-        result.error = strdup("Invalid 'pattern'");
-        return result;
-    }
-    pat_start++;
-    const char * pat_end = strchr(pat_start, '"');
-    if (!pat_end) {
-        result.success = false;
-        result.error = strdup("Invalid 'pattern'");
-        return result;
-    }
-
-    size_t plen = (size_t)(pat_end - pat_start);
+    size_t plen = (size_t)pat_len_i;
 
     /* Optional directory, default to "." */
-    const char * dir = ".";
     char dir_buf[512] = ".";
-    const char * dir_start = strstr(args_json, "\"directory\"");
-    if (dir_start) {
-        dir_start = strchr(dir_start + 11, '"');
-        if (dir_start) {
-            dir_start++;
-            const char * dir_end = strchr(dir_start, '"');
-            if (dir_end) {
-                size_t dlen = (size_t)(dir_end - dir_start);
-                if (dlen < sizeof(dir_buf)) {
-                    memcpy(dir_buf, dir_start, dlen);
-                    dir_buf[dlen] = '\0';
-                }
-            }
-        }
-    }
-    dir = dir_buf;
+    nj_copy_str(args_json, "directory", dir_buf, sizeof(dir_buf));
+    const char * dir = dir_buf;
 
     /* Validate pattern and directory: reject shell metacharacters */
     if (!is_safe_for_shell_embed(pat_start, plen)) {
@@ -887,27 +711,14 @@ static neuronos_tool_result_t tool_http_get(const char * args_json, void * user_
     neuronos_tool_result_t result = {0};
 
     /* Extract "url" */
-    const char * url_start = strstr(args_json, "\"url\"");
+    int url_len_i = 0;
+    const char * url_start = nj_find_str(args_json, "url", &url_len_i);
     if (!url_start) {
         result.success = false;
-        result.error = strdup("Missing 'url' argument");
+        result.error = strdup("Missing or invalid 'url' argument");
         return result;
     }
-    url_start = strchr(url_start + 5, '"');
-    if (!url_start) {
-        result.success = false;
-        result.error = strdup("Invalid 'url'");
-        return result;
-    }
-    url_start++;
-    const char * url_end = strchr(url_start, '"');
-    if (!url_end) {
-        result.success = false;
-        result.error = strdup("Invalid 'url'");
-        return result;
-    }
-
-    size_t ulen = (size_t)(url_end - url_start);
+    size_t ulen = (size_t)url_len_i;
 
     /* Validate URL starts with http:// or https:// */
     if (ulen < 8 || (strncmp(url_start, "http://", 7) != 0 && strncmp(url_start, "https://", 8) != 0)) {
@@ -986,24 +797,10 @@ static neuronos_tool_result_t tool_http_get(const char * args_json, void * user_
  * user_data points to a neuronos_memory_t* (set at registration time).
  * ============================================================ */
 
-/* Helper: extract a JSON string field value (reused for memory tools) */
+/* Helper: extract a JSON string field value (reused for memory tools).
+ * Uses the unified JSON parser for correct key matching. */
 static char * mem_json_extract(const char * json, const char * field) {
-    char pattern[128];
-    snprintf(pattern, sizeof(pattern), "\"%s\"", field);
-    const char * pos = strstr(json, pattern);
-    if (!pos) return NULL;
-    pos += strlen(pattern);
-    while (*pos == ' ' || *pos == '\t' || *pos == ':') pos++;
-    if (*pos != '"') return NULL;
-    pos++;
-    const char * start = pos;
-    while (*pos && !(*pos == '"' && *(pos - 1) != '\\')) pos++;
-    size_t len = (size_t)(pos - start);
-    char * val = malloc(len + 1);
-    if (!val) return NULL;
-    memcpy(val, start, len);
-    val[len] = '\0';
-    return val;
+    return nj_alloc_str(json, field);
 }
 
 /* --- memory_store tool --- */
@@ -1160,35 +957,14 @@ static neuronos_tool_result_t tool_read_pdf(const char * args_json, void * user_
     neuronos_tool_result_t result = {0};
 
     /* Extract "path" */
-    const char * path_start = strstr(args_json, "\"path\"");
-    if (!path_start) {
-        result.success = false;
-        result.error = strdup("Missing 'path' argument");
-        return result;
-    }
-    path_start = strchr(path_start + 6, '"');
-    if (!path_start) {
-        result.success = false;
-        result.error = strdup("Invalid 'path'");
-        return result;
-    }
-    path_start++;
-    const char * path_end = strchr(path_start, '"');
-    if (!path_end) {
-        result.success = false;
-        result.error = strdup("Invalid 'path'");
-        return result;
-    }
-
-    size_t path_len = (size_t)(path_end - path_start);
     char path[1024];
-    if (path_len >= sizeof(path)) {
+    int path_rc = nj_copy_str(args_json, "path", path, sizeof(path));
+    if (path_rc < 0) {
         result.success = false;
-        result.error = strdup("Path too long");
+        result.error = strdup("Missing or invalid 'path' argument");
         return result;
     }
-    memcpy(path, path_start, path_len);
-    path[path_len] = '\0';
+    size_t path_len = (size_t)path_rc;
 
     /* Validate path: reject shell metacharacters */
     if (!is_safe_path(path, path_len)) {
@@ -1220,32 +996,20 @@ static neuronos_tool_result_t tool_read_pdf(const char * args_json, void * user_
     /* Optional "pages" field: "1-5", "3", "first" / "last" range */
     int first_page = 0; /* 0 = all */
     int last_page = 0;
-    const char * pages_start = strstr(args_json, "\"pages\"");
-    if (pages_start) {
-        pages_start = strchr(pages_start + 7, '"');
-        if (pages_start) {
-            pages_start++;
-            const char * pages_end = strchr(pages_start, '"');
-            if (pages_end) {
-                char pages_buf[64] = {0};
-                size_t plen = (size_t)(pages_end - pages_start);
-                if (plen > 0 && plen < sizeof(pages_buf)) {
-                    memcpy(pages_buf, pages_start, plen);
-                    /* Parse "N" or "N-M" */
-                    char * dash = strchr(pages_buf, '-');
-                    if (dash) {
-                        *dash = '\0';
-                        first_page = atoi(pages_buf);
-                        last_page = atoi(dash + 1);
-                    } else {
-                        first_page = atoi(pages_buf);
-                        last_page = first_page;
-                    }
-                    if (first_page < 1) first_page = 1;
-                    if (last_page < first_page) last_page = first_page;
-                }
-            }
+    char pages_buf[64] = {0};
+    if (nj_copy_str(args_json, "pages", pages_buf, sizeof(pages_buf)) > 0) {
+        /* Parse "N" or "N-M" */
+        char * dash = strchr(pages_buf, '-');
+        if (dash) {
+            *dash = '\0';
+            first_page = atoi(pages_buf);
+            last_page = atoi(dash + 1);
+        } else {
+            first_page = atoi(pages_buf);
+            last_page = first_page;
         }
+        if (first_page < 1) first_page = 1;
+        if (last_page < first_page) last_page = first_page;
     }
 
     /* Build pdftotext command (platform-specific shell quoting) */

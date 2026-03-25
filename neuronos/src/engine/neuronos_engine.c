@@ -250,6 +250,15 @@ int neuronos_model_context_size(const neuronos_model_t * model) {
     return model ? model->context_size : 0;
 }
 
+int neuronos_tokenize_count(const neuronos_model_t * model, const char * text) {
+    if (!model || !model->llama_model || !text)
+        return -1;
+    int len = (int)strlen(text);
+    /* Passing NULL buffer with 0 capacity returns negative token count */
+    int n = -llama_tokenize(model->llama_model, text, len, NULL, 0, true, true);
+    return n > 0 ? n : 0;
+}
+
 /* ============================================================
  * GENERATE
  * ============================================================ */

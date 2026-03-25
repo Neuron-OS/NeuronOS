@@ -37,6 +37,7 @@ typedef SOCKET socket_t;
     #include <netinet/in.h>
     #include <sys/socket.h>
     #include <unistd.h>
+    #include <pthread.h>
 typedef int socket_t;
     #define INVALID_SOCK (-1)
     #define close_socket close
@@ -47,6 +48,106 @@ static volatile int g_running = 1;
 static neuronos_model_t * g_model = NULL;
 static neuronos_tool_registry_t * g_tools = NULL;
 static neuronos_agent_t * g_agent = NULL; /* Non-NULL = agent mode with chat UI */
+
+/* Forward declarations for handler functions (used by dispatch_inference) */
+static void send_json(socket_t sock, int status, const char * json);
+static void send_response(socket_t sock, int status_code, const char * status_text,
+                           const char * content_type, const char * body, int body_len);
+static void handle_completions(socket_t sock, const char * body);
+static void handle_chat_completions(socket_t sock, const char * body);
+static void handle_anthropic_messages(socket_t sock, const char * body);
+static void handle_agent_chat(socket_t sock, const char * body);
+
+/* ---- Inference mutex ----
+ * The llama.cpp context is NOT thread-safe: only one inference
+ * request can run at a time. We use a mutex so the accept loop
+ * can keep serving lightweight requests (health, models, UI)
+ * while an inference request is in progress. */
+#ifdef _WIN32
+static CRITICAL_SECTION g_inference_mutex;
+#define INFERENCE_LOCK()   EnterCriticalSection(&g_inference_mutex)
+#define INFERENCE_UNLOCK() LeaveCriticalSection(&g_inference_mutex)
+#define INFERENCE_INIT()   InitializeCriticalSection(&g_inference_mutex)
+#define INFERENCE_DESTROY() DeleteCriticalSection(&g_inference_mutex)
+#else
+static pthread_mutex_t g_inference_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define INFERENCE_LOCK()   pthread_mutex_lock(&g_inference_mutex)
+#define INFERENCE_UNLOCK() pthread_mutex_unlock(&g_inference_mutex)
+#define INFERENCE_INIT()   ((void)0)
+#define INFERENCE_DESTROY() pthread_mutex_destroy(&g_inference_mutex)
+#endif
+
+/* ---- Worker thread data ---- */
+typedef enum {
+    REQ_COMPLETIONS,
+    REQ_CHAT_COMPLETIONS,
+    REQ_ANTHROPIC_MESSAGES,
+    REQ_AGENT_CHAT,
+} request_type_t;
+
+typedef struct {
+    socket_t client_fd;
+    request_type_t type;
+    char body[MAX_REQUEST];
+} inference_request_t;
+
+/* Process an inference request (called in a detached thread) */
+#ifdef _WIN32
+static DWORD WINAPI inference_worker(LPVOID arg) {
+#else
+static void * inference_worker(void * arg) {
+#endif
+    inference_request_t * req = (inference_request_t *)arg;
+
+    INFERENCE_LOCK();
+    switch (req->type) {
+        case REQ_COMPLETIONS:       handle_completions(req->client_fd, req->body); break;
+        case REQ_CHAT_COMPLETIONS:  handle_chat_completions(req->client_fd, req->body); break;
+        case REQ_ANTHROPIC_MESSAGES: handle_anthropic_messages(req->client_fd, req->body); break;
+        case REQ_AGENT_CHAT:        handle_agent_chat(req->client_fd, req->body); break;
+    }
+    INFERENCE_UNLOCK();
+
+    close_socket(req->client_fd);
+    free(req);
+
+#ifdef _WIN32
+    return 0;
+#else
+    return NULL;
+#endif
+}
+
+/* Dispatch an inference request to a background thread */
+static void dispatch_inference(socket_t client_fd, request_type_t type, const char * body) {
+    inference_request_t * req = malloc(sizeof(inference_request_t));
+    if (!req) {
+        send_json(client_fd, 503, "{\"error\":{\"message\":\"Server busy\"}}");
+        close_socket(client_fd);
+        return;
+    }
+    req->client_fd = client_fd;
+    req->type = type;
+    strncpy(req->body, body, MAX_REQUEST - 1);
+    req->body[MAX_REQUEST - 1] = '\0';
+
+#ifdef _WIN32
+    HANDLE h = CreateThread(NULL, 0, inference_worker, req, 0, NULL);
+    if (h) CloseHandle(h);
+    else { free(req); close_socket(client_fd); }
+#else
+    pthread_t tid;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&tid, &attr, inference_worker, req) != 0) {
+        free(req);
+        send_json(client_fd, 503, "{\"error\":{\"message\":\"Server busy\"}}");
+        close_socket(client_fd);
+    }
+    pthread_attr_destroy(&attr);
+#endif
+}
 
 static void signal_handler(int sig) {
     (void)sig;
@@ -1070,6 +1171,8 @@ neuronos_status_t neuronos_server_start(neuronos_model_t * model, neuronos_tool_
             g_agent ? "Agent chat UI ready                     "
                     : "OpenAI-compatible API ready             ");
 
+    INFERENCE_INIT();
+
     while (g_running) {
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
@@ -1087,37 +1190,45 @@ neuronos_status_t neuronos_server_start(neuronos_model_t * model, neuronos_tool_
         if (n > 0)
             total_read = n;
 
+        bool dispatched = false; /* If true, worker thread owns client_fd */
+
         /* If we have Content-Length, read the rest of body if needed */
         if (total_read > 0) {
             http_request_t req;
             if (parse_request(raw, total_read, &req) == 0) {
-                /* Route request */
+                /* Route request — lightweight endpoints handled inline,
+                 * inference endpoints dispatched to worker thread */
                 if (strcmp(req.method, "OPTIONS") == 0) {
-                    /* CORS preflight */
                     send_response(client_fd, 204, "No Content", "text/plain", "", 0);
                 } else if (strcmp(req.path, "/health") == 0) {
                     handle_health(client_fd);
                 } else if (strcmp(req.path, "/v1/models") == 0) {
                     handle_models(client_fd);
-                } else if (strcmp(req.path, "/v1/completions") == 0 && strcmp(req.method, "POST") == 0) {
-                    handle_completions(client_fd, req.body);
-                } else if (strcmp(req.path, "/v1/chat/completions") == 0 && strcmp(req.method, "POST") == 0) {
-                    handle_chat_completions(client_fd, req.body);
-                } else if (strcmp(req.path, "/v1/messages") == 0 && strcmp(req.method, "POST") == 0) {
-                    handle_anthropic_messages(client_fd, req.body);
-                } else if (strcmp(req.path, "/api/chat") == 0 && strcmp(req.method, "POST") == 0) {
-                    handle_agent_chat(client_fd, req.body);
                 } else if (strcmp(req.path, "/") == 0) {
                     handle_root(client_fd, req.accept_gzip);
+                } else if (strcmp(req.path, "/v1/completions") == 0 && strcmp(req.method, "POST") == 0) {
+                    dispatch_inference(client_fd, REQ_COMPLETIONS, req.body);
+                    dispatched = true;
+                } else if (strcmp(req.path, "/v1/chat/completions") == 0 && strcmp(req.method, "POST") == 0) {
+                    dispatch_inference(client_fd, REQ_CHAT_COMPLETIONS, req.body);
+                    dispatched = true;
+                } else if (strcmp(req.path, "/v1/messages") == 0 && strcmp(req.method, "POST") == 0) {
+                    dispatch_inference(client_fd, REQ_ANTHROPIC_MESSAGES, req.body);
+                    dispatched = true;
+                } else if (strcmp(req.path, "/api/chat") == 0 && strcmp(req.method, "POST") == 0) {
+                    dispatch_inference(client_fd, REQ_AGENT_CHAT, req.body);
+                    dispatched = true;
                 } else {
                     send_json(client_fd, 404, "{\"error\":{\"message\":\"Not found\"}}");
                 }
             }
         }
 
-        close_socket(client_fd);
+        if (!dispatched)
+            close_socket(client_fd);
     }
 
+    INFERENCE_DESTROY();
     close_socket(server_fd);
 
 #ifdef _WIN32
